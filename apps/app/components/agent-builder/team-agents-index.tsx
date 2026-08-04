@@ -6,9 +6,11 @@ import { Icon } from "@crm/ui/components/icon";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useTRPC } from "@/lib/trpc/client";
+import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 
 export function TeamAgentsIndex() {
 	const trpc = useTRPC();
+	const workspaceUrl = useWorkspaceUrl();
 	const agents = useQuery(trpc.agents.list.queryOptions());
 
 	return (
@@ -28,7 +30,7 @@ export function TeamAgentsIndex() {
 						{agents.data.map((agent) => (
 							<Link
 								key={agent.id}
-								href={`/agents/${agent.id}`}
+								href={workspaceUrl(`/agents/${agent.id}`)}
 								transitionTypes={["nav-forward"]}
 								className="flex min-h-16 min-w-0 items-start gap-3 border-t px-4 py-4 outline-none first:border-t-0 hover:bg-muted/50 focus-visible:bg-muted/50 sm:items-center sm:gap-4 sm:px-5 sm:py-3"
 							>
@@ -70,7 +72,7 @@ export function TeamAgentsIndex() {
 							deploy.
 						</p>
 						<Link
-							href="/agents"
+							href={workspaceUrl("/agents")}
 							className="mt-4 text-primary text-xs hover:underline"
 						>
 							Open the agent builder

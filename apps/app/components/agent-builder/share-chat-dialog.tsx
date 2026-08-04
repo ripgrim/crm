@@ -23,6 +23,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc/client";
+import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 
 export function ShareChatDialog({
 	conversationId,
@@ -32,6 +33,7 @@ export function ShareChatDialog({
 	title: string;
 }) {
 	const trpc = useTRPC();
+	const workspaceUrl = useWorkspaceUrl();
 	const queryClient = useQueryClient();
 	const [open, setOpen] = useState(false);
 	const [choice, setChoice] = useState<boolean | null>(null);
@@ -72,7 +74,7 @@ export function ShareChatDialog({
 	const copyLink = async () => {
 		if (!token) return;
 		await navigator.clipboard.writeText(
-			`${window.location.origin}/chat/${token}`,
+			`${window.location.origin}${workspaceUrl(`/chat/${token}`)}`,
 		);
 		toast.success("Chat link copied.");
 	};
@@ -147,7 +149,7 @@ export function ShareChatDialog({
 						<div className="flex h-9 items-center gap-3 rounded-md border bg-background py-[3px] pr-[3px] pl-4">
 							<span className="min-w-0 flex-1 truncate font-mono text-xs">
 								{token
-									? `crm.trycomp.ai/chat/${token.slice(0, 12)}…`
+									? `${workspaceUrl(`/chat/${token.slice(0, 12)}`)}…`
 									: "An active read-only link exists"}
 							</span>
 							<Button

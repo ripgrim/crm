@@ -1,10 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import {
-	DEFAULT_WORKSPACE_NAME,
-	WORKSPACE_ID,
-	WORKSPACE_SLUG,
-} from "@crm/auth";
+import { DEFAULT_WORKSPACE_NAME, WORKSPACE_ID } from "@crm/auth";
 import { db } from "@crm/db";
+import { workspaceSlug } from "@crm/db/workspace";
 import { AgentAccessService } from "../src/agent/agent-access.service";
 import { AgentDefinitionsService } from "../src/agent/agent-definitions.service";
 
@@ -49,7 +46,7 @@ beforeAll(async () => {
 		create: {
 			id: WORKSPACE_ID,
 			name: DEFAULT_WORKSPACE_NAME,
-			slug: WORKSPACE_SLUG,
+			slug: workspaceSlug(DEFAULT_WORKSPACE_NAME),
 			createdAt: new Date(),
 		},
 	});

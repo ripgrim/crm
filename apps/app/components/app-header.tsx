@@ -24,6 +24,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { useMobileNav } from "@/components/mobile-nav";
 import { useTRPC } from "@/lib/trpc/client";
+import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 
 type User = { name: string; email: string; image: string | null };
 
@@ -44,6 +45,7 @@ export function workspaceLabel(name: string | undefined): string {
 export function AppHeader({ user }: { user: User }) {
 	const { setOpen: setMobileNavOpen } = useMobileNav();
 	const trpc = useTRPC();
+	const workspaceUrl = useWorkspaceUrl();
 	const workspace = useQuery(trpc.workspace.get.queryOptions());
 	const label = workspaceLabel(workspace.data?.name);
 
@@ -71,7 +73,7 @@ export function AppHeader({ user }: { user: User }) {
 					<Menu />
 				</Button>
 				<Link
-					href="/"
+					href={workspaceUrl()}
 					aria-label="Homepage"
 					className="hidden size-8 items-center justify-center text-foreground md:flex"
 				>

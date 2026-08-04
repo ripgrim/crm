@@ -14,7 +14,12 @@ const suffix = process.env.TEST_RUN_ID ?? "organization-spec";
 const emailOf = (label: string) => `${label}.${suffix}@example.test`;
 
 type Snapshot = {
-	organization: { name: string; slug: string; website: string | null } | null;
+	organization: {
+		name: string;
+		slug: string;
+		website: string | null;
+		metadata: string | null;
+	} | null;
 	members: { id: string; userId: string; role: string; createdAt: Date }[];
 };
 
@@ -57,7 +62,7 @@ const clear = async () => {
 beforeAll(async () => {
 	const organization = await db.organization.findUnique({
 		where: { id: WORKSPACE_ID },
-		select: { name: true, slug: true, website: true },
+		select: { name: true, slug: true, website: true, metadata: true },
 	});
 
 	snapshot = {

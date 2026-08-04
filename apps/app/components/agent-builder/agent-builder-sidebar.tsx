@@ -13,6 +13,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/types";
+import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 
 type Conversation = RouterOutputs["conversations"]["builderList"][number];
 type TeamAgent = RouterOutputs["agents"]["list"][number];
@@ -25,6 +26,7 @@ export function AgentBuilderSidebar({
 	onNavigate?: () => void;
 }) {
 	const pathname = usePathname();
+	const workspaceUrl = useWorkspaceUrl();
 	const trpc = useTRPC();
 	const queryClient = useQueryClient();
 	const conversations = useQuery({
@@ -52,7 +54,11 @@ export function AgentBuilderSidebar({
 			<div className="flex h-7 shrink-0 items-center justify-between pl-2">
 				<span className="font-medium text-xs">Chats</span>
 				<Button asChild variant="ghost" size="icon-xs">
-					<Link href="/agents" aria-label="New agent chat" onClick={onNavigate}>
+					<Link
+						href={workspaceUrl("/agents")}
+						aria-label="New agent chat"
+						onClick={onNavigate}
+					>
 						<Icon icon={Add} />
 					</Link>
 				</Button>
@@ -65,11 +71,12 @@ export function AgentBuilderSidebar({
 							{group.label}
 						</div>
 						{group.items.map((conversation) => {
-							const active = pathname === `/chat/${conversation.id}`;
+							const href = workspaceUrl(`/chat/${conversation.id}`);
+							const active = pathname === href;
 							return (
 								<Link
 									key={conversation.id}
-									href={`/chat/${conversation.id}`}
+									href={href}
 									aria-current={active ? "page" : undefined}
 									onClick={() => {
 										if (conversation.unread) {
@@ -120,10 +127,12 @@ function TeamAgents({
 	pathname: string;
 	onNavigate?: () => void;
 }) {
+	const workspaceUrl = useWorkspaceUrl();
+
 	return (
 		<div className="mt-3 border-t pt-1">
 			<Link
-				href="/agents/team"
+				href={workspaceUrl("/agents/team")}
 				onClick={onNavigate}
 				className="flex h-8 items-end gap-2 rounded-sm px-2 pb-1 font-medium text-[11px] text-muted-foreground uppercase tracking-[0.08em] outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
 			>
@@ -131,11 +140,12 @@ function TeamAgents({
 				<span className="shrink-0 font-mono">{agents.length}</span>
 			</Link>
 			{agents.map((agent) => {
-				const active = pathname === `/agents/${agent.id}`;
+				const href = workspaceUrl(`/agents/${agent.id}`);
+				const active = pathname === href;
 				return (
 					<Link
 						key={agent.id}
-						href={`/agents/${agent.id}`}
+						href={href}
 						aria-current={active ? "page" : undefined}
 						onClick={onNavigate}
 						className={cn(

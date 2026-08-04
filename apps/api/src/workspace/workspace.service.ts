@@ -7,7 +7,7 @@ import {
 	type WorkspaceRole,
 } from "@crm/auth";
 import type { Db, Prisma } from "@crm/db";
-import { isOnboarded, markOnboarded } from "@crm/db/workspace";
+import { isOnboarded, markOnboarded, workspaceSlug } from "@crm/db/workspace";
 import {
 	BadRequestException,
 	ForbiddenException,
@@ -34,6 +34,7 @@ import type {
 
 export interface Workspace {
 	id: string;
+	slug: string;
 	name: string;
 	website: string | null;
 	onboarded: boolean;
@@ -104,6 +105,7 @@ export class WorkspaceService {
 
 		return {
 			id: row.id,
+			slug: row.slug,
 			name: row.name,
 			website: row.website,
 			onboarded: isOnboarded(row.metadata),
@@ -142,6 +144,7 @@ export class WorkspaceService {
 			where: { id: WORKSPACE_ID },
 			data: {
 				name: input.name,
+				slug: workspaceSlug(input.name),
 				website,
 				metadata: markOnboarded(before?.metadata ?? null, new Date()),
 			},
@@ -286,7 +289,13 @@ export class WorkspaceService {
 	private async readWorkspace() {
 		return this.db.organization.findUnique({
 			where: { id: WORKSPACE_ID },
-			select: { id: true, name: true, website: true, metadata: true },
+			select: {
+				id: true,
+				slug: true,
+				name: true,
+				website: true,
+				metadata: true,
+			},
 		});
 	}
 

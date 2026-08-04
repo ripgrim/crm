@@ -10,7 +10,6 @@ export {
 	isWorkspaceRole,
 	WORKSPACE_ID,
 	WORKSPACE_ROLES,
-	WORKSPACE_SLUG,
 	type WorkspaceRole,
 } from "./organization";
 export {

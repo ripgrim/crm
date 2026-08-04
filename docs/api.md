@@ -167,6 +167,20 @@ called, who works here, and what do we sell — and for nothing else.
     `requireGoogleAccess()` redirects to `/grant-access`, so gating it would
     ping-pong against the onboarding redirect for anyone who signed in without
     both scopes.
+  - **`/sign-in` is the only path a stranger may read**, and that list is a
+    different one from the ungated paths above. `/` joins it only when
+    `IS_MARKETING` is set: the landing page in `app/(landing)` markets *this*
+    product, so an install that is somebody else's sends a stranger arriving at
+    the root to `/sign-in` rather than to a page selling them a CRM they are
+    already running. See
+    [the environment rules](./environment.md#the-landing-page-is-a-flag-and-it-is-off).
+    - **The flag is read per request, not captured at import.** `isMarketing()`
+      in `apps/app/lib/env.ts` is a function for that reason — `proxy.ts` runs
+      in the Node runtime, so the variable is a live read, and a deployment that
+      changes it does not need a rebuild to be believed.
+    - **It changes nothing for anyone signed in.** A rep at `/` is sent to their
+      workspace by `appPath` either way, so the flag is exactly one decision:
+      what a stranger at the root is shown.
   - **An unreachable API fails open.** Each read returns `unknown` on a
     non-200, a timeout or a parse failure, and an unknown gate lets the request
     through. The alternative is an install that cannot reach its own API
@@ -211,6 +225,53 @@ called, who works here, and what do we sell — and for nothing else.
     `components/app-header.tsx` tests the name rather than comparing it to the
     default, because a workspace genuinely called `Acme CRM` has the same
     problem and no comparison to `DEFAULT_WORKSPACE_NAME` would catch it.
+- **The name is also the URL, and `workspaceSlug` is the one thing that says
+  so.** The CRM is served under the workspace's slug — `/comp-ai/companies`,
+  never `/companies` — which is what leaves `/` free for the landing page in
+  `app/(landing)`. It is a **cosmetic** prefix and it is emphatically not the
+  tenancy this file spends its first paragraphs refusing: no read takes it, no
+  record carries it, and the app resolves every query through `WORKSPACE_ID`
+  exactly as before. It exists so a rep reads their own company's name in the
+  address bar instead of somebody's route table.
+  - **The slug is the plugin's column, derived from the name.** Better Auth's
+    organization plugin owns `organization.slug` and enforces its uniqueness, so
+    that column is the answer and `workspace.get` returns it verbatim. What is
+    derived is what gets *written*: `workspaceSlug(name)` in
+    [`@crm/db/workspace`](../packages/db/src/workspace.ts) is the single rule,
+    applied by `WorkspaceService.update` on a rename and at create. Deriving on
+    *read* instead was the tempting shortcut and it is wrong the moment anything
+    else — the plugin, a script, a future admin UI — writes the column: two
+    answers to one question, and the URL a rep bookmarked disagreeing with the
+    row.
+  - **`ensureWorkspaceMembership` reconciles it**, in the same
+    `databaseHooks.session.create.before` hook that already guarantees the
+    workspace row and the caller's membership exist. That is what backfills an
+    install created before the slug meant anything — its row says `workspace`
+    and its name says `Comp AI` — without a migration that would restate the
+    slug rule in SQL. It writes only when the two disagree, and it degrades like
+    everything else in that hook.
+  - **A slug never collides with a route the app serves.** `RESERVED_SLUGS`
+    holds them — `sign-in`, `onboarding`, `settings`, `companies`, and the rest
+    — and a name that slugifies onto one gets `-crm` appended. Without it a
+    company called Settings has a CRM it cannot reach, and a static route in
+    `(landing)` wins over `[slug]` silently.
+  - **The proxy puts the slug on, and it is the only thing that does.** A path
+    with no slug is a link that predates the move (`/companies`); a path with
+    the wrong one is a stale bookmark from before a rename. Both are the same
+    request with the wrong front on it, so both are redirected onto the current
+    slug with the query string intact, rather than 404ing at somebody who did
+    nothing wrong. `app/(app)/[slug]/layout.tsx` is the backstop and
+    `notFound()`s on a mismatch the proxy could not read the slug to correct.
+  - **A signed-in rep does not see the landing page.** `/` resolves to their
+    workspace, which is what keeps every `callbackURL` and post-onboarding
+    `redirect("/")` in the codebase correct without any of them learning what a
+    slug is. There is one place to change that if the landing page should ever
+    outrank the CRM: `appPath` in `proxy.ts`.
+  - **Renaming moves the URL, so the form moves with it.** `workspace.update`
+    returns the new slug and `workspace-form.tsx` replaces the current location
+    onto it. Without that, saving a rename leaves the browser sitting on a slug
+    that no longer resolves, and the next navigation 404s at the person who just
+    renamed their own company.
 - **The website is the field with a consequence.** Saving it queues the agent's
   `workspace-profile` task, and what comes back is read into the opening context
   of every session the agent runs — see

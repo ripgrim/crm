@@ -34,6 +34,7 @@ import {
 } from "@/lib/agent-transcript";
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/types";
+import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 import { AgentComposer, type BuilderPrompt } from "./agent-composer";
 import { ShareChatDialog } from "./share-chat-dialog";
 
@@ -60,6 +61,7 @@ export function AgentBuilderChat({
 	conversationId: string;
 }) {
 	const trpc = useTRPC();
+	const workspaceUrl = useWorkspaceUrl();
 	const queryClient = useQueryClient();
 	const conversation = useQuery({
 		...trpc.conversations.builderById.queryOptions({ id: conversationId }),
@@ -122,7 +124,7 @@ export function AgentBuilderChat({
 						{conversation.error.message}
 					</p>
 					<Button asChild variant="outline" className="mt-5">
-						<Link href="/agents">Start a new chat</Link>
+						<Link href={workspaceUrl("/agents")}>Start a new chat</Link>
 					</Button>
 				</div>
 			</main>
@@ -340,6 +342,7 @@ function ChatHeader({
 	working: boolean;
 	creatingAgent: boolean;
 }) {
+	const workspaceUrl = useWorkspaceUrl();
 	const title =
 		(creatingAgent ? conversation.agent?.name : null) ??
 		conversation.title ??
@@ -367,7 +370,7 @@ function ChatHeader({
 				) : null}
 			</div>
 			<Button asChild variant="ghost" size="icon-sm">
-				<Link href="/agents" aria-label="Start a new chat">
+				<Link href={workspaceUrl("/agents")} aria-label="Start a new chat">
 					<Icon icon={Add} />
 				</Link>
 			</Button>
@@ -801,6 +804,7 @@ function DeployedAgentCard({
 	onFollowUp: (message: string) => void;
 }) {
 	const trpc = useTRPC();
+	const workspaceUrl = useWorkspaceUrl();
 	const queryClient = useQueryClient();
 	const agent = conversation.agent;
 	const run = useMutation(
@@ -849,7 +853,7 @@ function DeployedAgentCard({
 						</p>
 					</div>
 					<Button asChild variant="outline" size="sm">
-						<Link href={`/agents/${agent.id}`}>Open agent</Link>
+						<Link href={workspaceUrl(`/agents/${agent.id}`)}>Open agent</Link>
 					</Button>
 				</div>
 				<div className="grid border-b sm:grid-cols-3">

@@ -1,9 +1,7 @@
 import { db } from "@crm/db";
-import { WORKSPACE_ID } from "@crm/db/workspace";
+import { WORKSPACE_ID, workspaceSlug } from "@crm/db/workspace";
 
 export { WORKSPACE_ID };
-
-export const WORKSPACE_SLUG = "workspace";
 
 export const DEFAULT_WORKSPACE_NAME = "CRM";
 
@@ -37,12 +35,21 @@ export async function ensureWorkspaceMembership(
 				create: {
 					id: WORKSPACE_ID,
 					name: DEFAULT_WORKSPACE_NAME,
-					slug: WORKSPACE_SLUG,
+					slug: workspaceSlug(DEFAULT_WORKSPACE_NAME),
 					createdAt: new Date(),
 				},
 				update: {},
-				select: { id: true },
+				select: { id: true, name: true, slug: true },
 			});
+
+			const slug = workspaceSlug(workspace.name);
+
+			if (workspace.slug !== slug) {
+				await tx.organization.update({
+					where: { id: workspace.id },
+					data: { slug },
+				});
+			}
 
 			const enrolled = await tx.member.count({
 				where: { organizationId: workspace.id },

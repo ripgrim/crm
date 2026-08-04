@@ -36,6 +36,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/types";
+import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 
 type AgentTab = "overview" | "runs" | "activity";
 type AgentDetail = RouterOutputs["agents"]["byId"];
@@ -266,6 +267,7 @@ function DeleteAgentAction({
 	const trpc = useTRPC();
 	const queryClient = useQueryClient();
 	const router = useRouter();
+	const workspaceUrl = useWorkspaceUrl();
 	const [confirming, setConfirming] = useState(false);
 	const remove = useMutation(
 		trpc.agents.remove.mutationOptions({
@@ -281,7 +283,7 @@ function DeleteAgentAction({
 				]);
 				setConfirming(false);
 				toast.success(`${name} was deleted.`);
-				router.replace("/agents");
+				router.replace(workspaceUrl("/agents"));
 			},
 			onError: (error) => toast.error(error.message),
 		}),

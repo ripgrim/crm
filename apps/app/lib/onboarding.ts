@@ -34,15 +34,27 @@ async function read<T>(
 	}
 }
 
-export async function readOnboardingGate(request: NextRequest): Promise<Gate> {
-	const workspace = await read<{ onboarded?: boolean; canRename?: boolean }>(
-		request,
-		"workspace.get",
-	);
+export type WorkspaceGate = { gate: Gate; slug: string | null };
 
-	if (typeof workspace?.onboarded !== "boolean") return "unknown";
+export async function readWorkspaceGate(
+	request: NextRequest,
+): Promise<WorkspaceGate> {
+	const workspace = await read<{
+		onboarded?: boolean;
+		canRename?: boolean;
+		slug?: string;
+	}>(request, "workspace.get");
 
-	return workspace.onboarded || !workspace.canRename ? "settled" : "required";
+	const slug = workspace?.slug ? workspace.slug : null;
+
+	if (typeof workspace?.onboarded !== "boolean") {
+		return { gate: "unknown", slug };
+	}
+
+	return {
+		gate: workspace.onboarded || !workspace.canRename ? "settled" : "required",
+		slug,
+	};
 }
 
 export async function readResearchGate(request: NextRequest): Promise<Gate> {

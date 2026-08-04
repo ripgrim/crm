@@ -24,8 +24,10 @@ import {
 import { cn } from "@crm/ui/lib/utils";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useMemo } from "react";
 import { AgentBuilderSidebar } from "@/components/agent-builder/agent-builder-sidebar";
 import { useMobileNav } from "@/components/mobile-nav";
+import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 
 type RailItem = {
 	title: string;
@@ -160,12 +162,21 @@ function MobileRailIconLink({
 
 export function AppIconRail() {
 	const pathname = usePathname();
+	const workspaceUrl = useWorkspaceUrl();
 	const { open, setOpen } = useMobileNav();
-	const inAgents =
-		pathname === "/agent" ||
-		pathname === "/agents" ||
-		pathname.startsWith("/agents/") ||
-		pathname.startsWith("/chat/");
+
+	const items = useMemo(
+		() =>
+			ITEMS.map((item) => ({
+				...item,
+				href: workspaceUrl(item.href),
+				related: item.related?.map((path) => workspaceUrl(path)),
+			})),
+		[workspaceUrl],
+	);
+	const inAgents = items.some(
+		(item) => item.title === "Agents" && isActive(item, pathname),
+	);
 
 	return (
 		<>
@@ -173,7 +184,7 @@ export function AppIconRail() {
 				aria-label="Primary"
 				className="hidden w-14 shrink-0 flex-col items-center gap-1 border-r py-3 md:flex [view-transition-name:app-rail]"
 			>
-				{ITEMS.map((item) => (
+				{items.map((item) => (
 					<RailLink
 						key={item.href}
 						item={item}
@@ -205,7 +216,7 @@ export function AppIconRail() {
 								<Icon icon={Close} />
 							</Button>
 							<div className="my-1 h-px w-5 bg-border" />
-							{ITEMS.map((item) => (
+							{items.map((item) => (
 								<MobileRailIconLink
 									key={item.href}
 									item={item}
@@ -228,7 +239,7 @@ export function AppIconRail() {
 							aria-label="Primary"
 							className="flex flex-1 flex-col gap-1 p-2"
 						>
-							{ITEMS.map((item) => (
+							{items.map((item) => (
 								<MobileRailLink
 									key={item.href}
 									item={item}

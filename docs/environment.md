@@ -103,6 +103,34 @@ at import, so the Better Auth CLI — which loads `auth.ts` in a process with no
 
 Live in `packages/auth/src/workspace.ts`.
 
+## The landing page is a flag, and it is off
+
+`IS_MARKETING="true"` serves the landing page in `app/(landing)` at `/`.
+Anything else — unset, empty, `false`, `1` — and a signed-out visitor to the
+root is redirected to `/sign-in`.
+
+It defaults to off because the page markets *this* product. A clone serving it
+is telling a stranger about a CRM that stranger is already running, under
+somebody else's name; and on an internal install there is no stranger to tell,
+only a rep who signed out and wants the sign-in box.
+
+- **Only the literal `true` turns it on**, which is the same shape as
+  `PRISMA_LOG_QUERIES`. A flag with several truthy spellings is a flag that is
+  set and not working.
+- **It decides one thing: what a stranger at `/` is shown.** Anyone signed in is
+  sent to their workspace by the proxy either way, and no other route changes —
+  the landing page's own components are still built and still reachable from a
+  deploy that sets the flag.
+- **The read is live.** `isMarketing()` in `apps/app/lib/env.ts` reads
+  `process.env` per request rather than at import: `proxy.ts` runs in Next's
+  Node runtime, so the value comes from the environment the server is running
+  in, not from the one it was built in. Declared in `apps/app/turbo.json` under
+  `passThroughEnv` for both `dev` and `build`, because Turbo runs in strict env
+  mode.
+
+See [the proxy rules](./api.md#there-is-exactly-one-organization-and-it-is-not-a-tenancy-boundary)
+for where it sits among the other gates.
+
 ## Where things are
 
 `API_URL` and `APP_URL` default to `http://localhost:3001` and

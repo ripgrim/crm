@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc/client";
+import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 import { AgentComposer, type BuilderPrompt } from "./agent-composer";
 
 const SUGGESTIONS = [
@@ -17,6 +18,7 @@ const SUGGESTIONS = [
 
 export function AgentBuilderHome({ name }: { name: string }) {
 	const router = useRouter();
+	const workspaceUrl = useWorkspaceUrl();
 	const trpc = useTRPC();
 	const queryClient = useQueryClient();
 	const [initialPrompt, setInitialPrompt] = useState("");
@@ -26,7 +28,7 @@ export function AgentBuilderHome({ name }: { name: string }) {
 				await queryClient.invalidateQueries({
 					queryKey: trpc.conversations.builderList.pathKey(),
 				});
-				router.push(`/chat/${id}`);
+				router.push(workspaceUrl(`/chat/${id}`));
 			},
 			onError: (error) => toast.error(error.message),
 		}),
