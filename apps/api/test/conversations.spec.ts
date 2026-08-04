@@ -25,6 +25,7 @@ let service: ConversationsService;
 let cache: ReturnType<typeof memoryCache>;
 
 beforeAll(async () => {
+	await db.agentConversation.deleteMany({ where: { userId } });
 	await db.user.deleteMany({ where: { id: userId } });
 	await db.contact.deleteMany({ where: { email } });
 
@@ -46,6 +47,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	await db.contact.deleteMany({ where: { email } });
+	await db.agentConversation.deleteMany({ where: { userId } });
 	await db.user.deleteMany({ where: { id: userId } });
 });
 
@@ -158,5 +160,35 @@ describe("ConversationsService", () => {
 		if (!conversation) throw new Error("expected a conversation");
 
 		expect(service.remove(conversation.id, "somebody-else")).rejects.toThrow();
+	});
+
+	it("persists the command type that controls agent creation", async () => {
+		const chat = await service.createBuilder(
+			{
+				clientRequestId: crypto.randomUUID(),
+				commandType: "CHAT",
+				message: "Tell me about this customer",
+				resources: [],
+				attachments: [],
+			},
+			userId,
+		);
+		const creation = await service.createBuilder(
+			{
+				clientRequestId: crypto.randomUUID(),
+				commandType: "CREATE_AGENT",
+				message: "/Create agent Flag stalled deals",
+				resources: [],
+				attachments: [],
+			},
+			userId,
+		);
+
+		expect(
+			(await service.builderById(chat.id, userId)).submissions[0],
+		).toMatchObject({ commandType: "CHAT" });
+		expect(
+			(await service.builderById(creation.id, userId)).submissions[0],
+		).toMatchObject({ commandType: "CREATE_AGENT" });
 	});
 });

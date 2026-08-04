@@ -42,7 +42,7 @@ export function ConversationPicker({
 	const label = current?.title ?? "New conversation";
 
 	return (
-		<div className="flex items-center gap-2 border-b px-5 py-2">
+		<div className="flex min-w-0 items-center gap-2 border-b px-4 py-2 sm:px-5">
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
 					<Button

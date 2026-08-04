@@ -1,0 +1,349 @@
+import type { Db, Prisma } from "@crm/db";
+import {
+	BadRequestException,
+	Injectable,
+	NotFoundException,
+} from "@nestjs/common";
+import { InjectDatabase } from "../database/database.constants";
+import { AgentAccessService } from "./agent-access.service";
+import type { AgentDeployInput, AgentUpdateInput } from "./agents.contracts";
+
+@Injectable()
+export class AgentDefinitionsService {
+	constructor(
+		@InjectDatabase() private readonly db: Db,
+		private readonly access: AgentAccessService,
+	) {}
+
+	async list(userId: string) {
+		await this.access.assertMember(userId);
+
+		const rows = await this.db.agentDefinition.findMany({
+			where: { status: { not: "DELETED" } },
+			orderBy: { updatedAt: "desc" },
+			select: {
+				id: true,
+				name: true,
+				description: true,
+				status: true,
+				createdAt: true,
+				updatedAt: true,
+				createdBy: { select: { id: true, name: true, image: true } },
+				currentVersion: {
+					select: { id: true, number: true, deployedAt: true },
+				},
+				triggers: {
+					where: { enabled: true },
+					orderBy: { nextRunAt: "asc" },
+					take: 1,
+					select: { id: true, type: true, name: true, nextRunAt: true },
+				},
+				_count: { select: { runs: true } },
+			},
+		});
+
+		return rows.map((row) => ({
+			...row,
+			createdAt: row.createdAt.toISOString(),
+			updatedAt: row.updatedAt.toISOString(),
+			currentVersion: row.currentVersion
+				? {
+						...row.currentVersion,
+						deployedAt: row.currentVersion.deployedAt?.toISOString() ?? null,
+					}
+				: null,
+			triggers: row.triggers.map((trigger) => ({
+				...trigger,
+				nextRunAt: trigger.nextRunAt?.toISOString() ?? null,
+			})),
+			runCount: row._count.runs,
+		}));
+	}
+
+	async byId(id: string, userId: string) {
+		await this.access.assertMember(userId);
+
+		const row = await this.db.agentDefinition.findFirst({
+			where: { id, status: { not: "DELETED" } },
+			select: {
+				id: true,
+				name: true,
+				description: true,
+				status: true,
+				createdById: true,
+				createdAt: true,
+				updatedAt: true,
+				createdBy: { select: { id: true, name: true, image: true } },
+				currentVersion: {
+					select: {
+						id: true,
+						number: true,
+						status: true,
+						manifest: true,
+						modelId: true,
+						sandboxPolicy: true,
+						approvedAt: true,
+						deployedAt: true,
+					},
+				},
+				triggers: {
+					orderBy: { createdAt: "asc" },
+					select: {
+						id: true,
+						type: true,
+						name: true,
+						config: true,
+						enabled: true,
+						nextRunAt: true,
+						lastRunAt: true,
+					},
+				},
+				_count: { select: { runs: true } },
+			},
+		});
+
+		if (!row) throw new NotFoundException(`No agent with id ${id}.`);
+
+		return {
+			...row,
+			canManage: row.createdById === userId || (await this.canAdmin(userId)),
+			createdAt: row.createdAt.toISOString(),
+			updatedAt: row.updatedAt.toISOString(),
+			currentVersion: row.currentVersion
+				? {
+						...row.currentVersion,
+						approvedAt: row.currentVersion.approvedAt?.toISOString() ?? null,
+						deployedAt: row.currentVersion.deployedAt?.toISOString() ?? null,
+					}
+				: null,
+			triggers: row.triggers.map((trigger) => ({
+				...trigger,
+				nextRunAt: trigger.nextRunAt?.toISOString() ?? null,
+				lastRunAt: trigger.lastRunAt?.toISOString() ?? null,
+			})),
+			runCount: row._count.runs,
+		};
+	}
+
+	async update(input: AgentUpdateInput, userId: string) {
+		const agent = await this.access.assertCanManage(input.id, userId);
+		const description = input.description?.trim() || null;
+
+		const updated = await this.db.$transaction(async (tx) => {
+			const row = await tx.agentDefinition.update({
+				where: { id: input.id },
+				data: { name: input.name, description },
+				select: { id: true, name: true, description: true, status: true },
+			});
+
+			await tx.agentAuditEvent.create({
+				data: {
+					agentId: input.id,
+					actorUserId: userId,
+					actorType: "USER",
+					actorId: userId,
+					type: "agent.updated",
+					summary: "Changed agent details",
+					before: { name: agent.name, description: agent.description },
+					after: { name: input.name, description },
+				},
+			});
+
+			return row;
+		});
+
+		return updated;
+	}
+
+	async deploy(input: AgentDeployInput, userId: string) {
+		const agent = await this.access.assertCanManage(input.id, userId);
+		const existing = await this.db.agentAuditEvent.findFirst({
+			where: {
+				agentId: input.id,
+				type: "agent.deployed",
+				requestId: input.clientRequestId,
+			},
+			select: { versionId: true },
+		});
+
+		if (existing) {
+			if (existing.versionId !== input.versionId) {
+				throw new BadRequestException(
+					"That deployment request has already been used.",
+				);
+			}
+
+			return { id: input.id, versionId: input.versionId, status: "LIVE" };
+		}
+
+		const version = await this.db.agentVersion.findFirst({
+			where: { id: input.versionId, agentId: input.id },
+			select: { id: true, number: true, status: true },
+		});
+
+		if (!version) {
+			throw new NotFoundException(`No version with id ${input.versionId}.`);
+		}
+
+		if (version.status !== "READY" && version.status !== "DEPLOYED") {
+			throw new BadRequestException(
+				"Only a validated agent version can be deployed.",
+			);
+		}
+
+		const now = new Date();
+		return this.db.$transaction(async (tx) => {
+			await tx.agentVersion.updateMany({
+				where: {
+					agentId: input.id,
+					status: "DEPLOYED",
+					id: { not: input.versionId },
+				},
+				data: { status: "READY" },
+			});
+
+			await tx.agentVersion.update({
+				where: { id: input.versionId },
+				data: {
+					status: "DEPLOYED",
+					approvedAt: now,
+					deployedAt: now,
+				},
+			});
+
+			await tx.agentDefinition.update({
+				where: { id: input.id },
+				data: { currentVersionId: input.versionId, status: "LIVE" },
+			});
+
+			await tx.agentTrigger.updateMany({
+				where: { agentId: input.id },
+				data: { enabled: false },
+			});
+
+			await tx.agentTrigger.updateMany({
+				where: { agentId: input.id, versionId: input.versionId },
+				data: { enabled: true },
+			});
+
+			await tx.agentAuditEvent.create({
+				data: {
+					agentId: input.id,
+					versionId: input.versionId,
+					actorUserId: userId,
+					actorType: "USER",
+					actorId: userId,
+					type: "agent.deployed",
+					summary: `Made version ${version.number} live for the team`,
+					before: { status: agent.status },
+					after: { status: "LIVE", version: version.number },
+					requestId: input.clientRequestId,
+				},
+			});
+
+			return { id: input.id, versionId: input.versionId, status: "LIVE" };
+		});
+	}
+
+	async pause(id: string, userId: string) {
+		return this.changeStatus(
+			id,
+			userId,
+			"PAUSED",
+			"agent.paused",
+			"Paused agent",
+		);
+	}
+
+	async resume(id: string, userId: string) {
+		const agent = await this.access.assertCanManage(id, userId);
+		if (agent.status !== "PAUSED") {
+			throw new BadRequestException("Only a paused agent can be resumed.");
+		}
+
+		return this.changeStatus(
+			id,
+			userId,
+			"LIVE",
+			"agent.resumed",
+			"Resumed agent",
+		);
+	}
+
+	async archive(id: string, userId: string) {
+		return this.changeStatus(
+			id,
+			userId,
+			"ARCHIVED",
+			"agent.archived",
+			"Archived agent",
+			{ archivedAt: new Date() },
+		);
+	}
+
+	async restore(id: string, userId: string) {
+		const agent = await this.access.assertCanManage(id, userId);
+		if (agent.status !== "ARCHIVED") {
+			throw new BadRequestException("Only an archived agent can be restored.");
+		}
+
+		return this.changeStatus(
+			id,
+			userId,
+			"PAUSED",
+			"agent.restored",
+			"Restored agent",
+			{ archivedAt: null },
+		);
+	}
+
+	async remove(id: string, userId: string) {
+		return this.changeStatus(
+			id,
+			userId,
+			"DELETED",
+			"agent.deleted",
+			"Deleted agent",
+			{ deletedAt: new Date() },
+		);
+	}
+
+	private async changeStatus(
+		id: string,
+		userId: string,
+		status: "LIVE" | "PAUSED" | "ARCHIVED" | "DELETED",
+		type: string,
+		summary: string,
+		extra: Prisma.AgentDefinitionUpdateInput = {},
+	) {
+		const before = await this.access.assertCanManage(id, userId);
+
+		return this.db.$transaction(async (tx) => {
+			const agent = await tx.agentDefinition.update({
+				where: { id },
+				data: { status, ...extra },
+				select: { id: true, name: true, status: true, updatedAt: true },
+			});
+
+			await tx.agentAuditEvent.create({
+				data: {
+					agentId: id,
+					actorUserId: userId,
+					actorType: "USER",
+					actorId: userId,
+					type,
+					summary,
+					before: { status: before.status },
+					after: { status },
+				},
+			});
+
+			return { ...agent, updatedAt: agent.updatedAt.toISOString() };
+		});
+	}
+
+	private async canAdmin(userId: string): Promise<boolean> {
+		const role = await this.access.assertMember(userId);
+		return role === "owner" || role === "admin";
+	}
+}

@@ -260,11 +260,13 @@ rather than leaving it to be discovered on a settings page nobody visits.
     brand, and a free-provider address is refused with a documented `422`
     before any resolution — so `key-check@gmail.com` reaches Context, proves
     the key authenticates, and is never billed. Measured at about half a second.
-  - **`401` is the only answer that means the key is wrong.** A `403` about the
-    plan, a `422` refusing the probe, a `429`, a `500` — all of those were
-    served *after* the key authenticated, so the key is good and only the probe
-    was refused. `classifyKey` in `lib/context-dev.ts` holds that rule and
-    `test/verify-key.spec.ts` pins every branch of it.
+  - **An authentication status does not necessarily mean the key is wrong.**
+    Context returns `401` for an exhausted free-tier allowance as well as for
+    an invalid key, and `401` or `403` can also represent insufficient credits
+    or permissions. `classifyKey` inspects the stable error code and response
+    message before rejecting a key; quota, plan, rate-limit and permission
+    responses prove the key was recognised and allow it to be saved.
+    `test/verify-key.spec.ts` pins those branches.
   - **A check that cannot be made is not a failed check.** No
     `AGENT_BRIDGE_SECRET`, an agent that is down, a timeout — all return
     `unknown`, and an unknown answer *saves the key* and logs that it went in

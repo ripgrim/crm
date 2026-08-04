@@ -3,6 +3,7 @@ import { readdirSync } from "node:fs";
 import type { EveMessage } from "eve/react";
 import {
 	describe as describeStep,
+	latestTurnFailure,
 	NEW_THREAD,
 	outcomeTone,
 	pendingQuestion,
@@ -217,6 +218,58 @@ describe("pendingQuestion", () => {
 
 	it("finds nothing in an empty transcript", () => {
 		expect(pendingQuestion([])).toBeNull();
+	});
+});
+
+describe("latestTurnFailure", () => {
+	it("recognizes the Vercel Gateway free-tier rate limit", () => {
+		expect(
+			latestTurnFailure([
+				{
+					type: "turn.failed",
+					data: {
+						code: "MODEL_CALL_FAILED",
+						message:
+							"GatewayRateLimitError: Free tier requests on this model are rate-limited.",
+					},
+				},
+			]),
+		).toEqual({ code: "MODEL_CALL_FAILED", kind: "rate-limit" });
+	});
+
+	it("does not keep an earlier failure after a later turn completes", () => {
+		expect(
+			latestTurnFailure([
+				{ type: "turn.failed", data: { message: "Provider unavailable" } },
+				{ type: "turn.completed", data: {} },
+				{ type: "session.waiting", data: {} },
+			]),
+		).toBeNull();
+	});
+
+	it("recognizes a model restricted to paid Gateway credits", () => {
+		expect(
+			latestTurnFailure([
+				{
+					type: "session.failed",
+					data: {
+						code: "MODEL_CALL_FAILED",
+						message: "Free tier users do not have access to this model.",
+					},
+				},
+			]),
+		).toEqual({ code: "MODEL_CALL_FAILED", kind: "restricted" });
+	});
+
+	it("keeps provider details out of the display contract", () => {
+		expect(
+			latestTurnFailure([
+				{
+					type: "session.failed",
+					data: { message: "Internal provider stack and request body" },
+				},
+			]),
+		).toEqual({ code: "AGENT_FAILED", kind: "unknown" });
 	});
 });
 

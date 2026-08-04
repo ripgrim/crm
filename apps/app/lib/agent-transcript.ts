@@ -19,6 +19,16 @@ export type Source = {
 	network: "linkedin" | "github" | "web";
 };
 
+export type AgentTurnFailure = {
+	code: string;
+	kind: "rate-limit" | "restricted" | "credits" | "unknown";
+};
+
+type AgentStreamEvent = {
+	type: string;
+	data?: unknown;
+};
+
 const VERBS: Record<string, string> = {
 	read_crm_history: "Read our emails and meetings with them",
 	read_company_history: "Read everything we have on the company",
@@ -183,10 +193,50 @@ export function pendingQuestion(messages: readonly EveMessage[]) {
 	return null;
 }
 
+export function latestTurnFailure(
+	events: readonly AgentStreamEvent[],
+): AgentTurnFailure | null {
+	for (let index = events.length - 1; index >= 0; index -= 1) {
+		const event = events[index];
+		if (!event) continue;
+		if (event.type === "turn.completed") return null;
+		if (event.type !== "turn.failed" && event.type !== "session.failed") {
+			continue;
+		}
+
+		const data = recordOf(event.data);
+		const message = typeof data.message === "string" ? data.message : "";
+		const code = typeof data.code === "string" ? data.code : "AGENT_FAILED";
+
+		return {
+			code,
+			kind: /free tier users do not have access|RestrictedModelsError/i.test(
+				message,
+			)
+				? "restricted"
+				: /GatewayRateLimitError|free tier requests.*rate-?limited/i.test(
+							message,
+						)
+					? "rate-limit"
+					: /credits?|quota|billing|usage limit/i.test(message)
+						? "credits"
+						: "unknown",
+		};
+	}
+
+	return null;
+}
+
 function output(part: EveMessagePart): Record<string, unknown> | null {
 	return "output" in part && part.output && typeof part.output === "object"
 		? (part.output as Record<string, unknown>)
 		: null;
+}
+
+function recordOf(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
 }
 
 function hostOf(url: string): string {

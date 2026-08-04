@@ -221,7 +221,7 @@ function Thread({
 			<MessageScrollerProvider autoScroll defaultScrollPosition="end">
 				<MessageScroller className="flex-1">
 					<MessageScrollerViewport>
-						<MessageScrollerContent className="gap-3 px-5 py-4">
+						<MessageScrollerContent className="gap-3 px-4 py-4 sm:px-5">
 							{messages.length === 0 && !busy ? (
 								<Idle kind={record.kind} onAsk={ask} />
 							) : null}
@@ -251,15 +251,15 @@ function Thread({
 			{agent.error ? <Failure message={agent.error.message} /> : null}
 
 			{thread?.status === "working" && !busy ? (
-				<p className="border-t px-5 py-2 text-muted-foreground text-xs">
+				<p className="border-t px-4 py-2 text-pretty text-muted-foreground text-xs sm:px-5">
 					Still working on the last question. Your next one can go in when it
 					finishes.
 				</p>
 			) : null}
 
 			{ended ? (
-				<div className="flex items-center justify-between gap-3 border-t px-5 py-2">
-					<p className="text-muted-foreground text-xs">
+				<div className="flex flex-col items-start gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-2">
+					<p className="text-pretty text-muted-foreground text-xs">
 						This conversation has ended.
 					</p>
 					<Button variant="outline" size="sm" onClick={onNewThread}>
@@ -269,7 +269,7 @@ function Thread({
 			) : null}
 
 			<form
-				className="flex items-center gap-2 border-t px-5 py-3"
+				className="flex min-w-0 items-center gap-2 border-t px-4 py-3 sm:px-5"
 				onSubmit={(event) => {
 					event.preventDefault();
 					ask(draft);
@@ -340,9 +340,11 @@ function Failure({ message }: { message: string }) {
 			: null;
 
 	return (
-		<div className="border-t px-5 py-3 text-xs">
-			<p className="text-destructive">{message}</p>
-			{hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
+		<div className="border-t px-4 py-3 text-xs sm:px-5">
+			<p className="wrap-break-word text-destructive">{message}</p>
+			{hint ? (
+				<p className="wrap-break-word text-muted-foreground text-xs">{hint}</p>
+			) : null}
 		</div>
 	);
 }
@@ -362,20 +364,20 @@ const SOURCE_ICONS: Record<Source["network"], CarbonIcon> = {
 function Item({ item }: { item: TranscriptItem }) {
 	if (item.kind === "said") {
 		return item.mine ? (
-			<Message align="end">
+			<Message align="end" className="min-w-0">
 				<MessageContent>
 					<Bubble variant="secondary" align="end">
-						<BubbleContent>{item.text}</BubbleContent>
+						<BubbleContent className="text-pretty">{item.text}</BubbleContent>
 					</Bubble>
 				</MessageContent>
 			</Message>
 		) : (
-			<Message>
+			<Message className="min-w-0">
 				<AgentAvatar />
 				<MessageContent>
 					<Bubble variant="ghost">
 						<BubbleContent>
-							<Markdown>{item.text}</Markdown>
+							<Markdown className="wrap-break-word">{item.text}</Markdown>
 						</BubbleContent>
 					</Bubble>
 				</MessageContent>
@@ -384,7 +386,7 @@ function Item({ item }: { item: TranscriptItem }) {
 	}
 
 	return (
-		<div className="space-y-1.5">
+		<div className="min-w-0 space-y-1.5">
 			<Marker>
 				<MarkerIcon>
 					{item.pending ? <Spinner /> : <Icon icon={TONE_ICONS[item.tone]} />}
@@ -438,11 +440,13 @@ function Question({
 	agent: ReturnType<typeof useEveAgent>;
 }) {
 	return (
-		<Message>
+		<Message className="min-w-0">
 			<AgentAvatar />
 			<MessageContent>
 				<Bubble variant="tinted">
-					<BubbleContent>{question.prompt}</BubbleContent>
+					<BubbleContent className="text-pretty">
+						{question.prompt}
+					</BubbleContent>
 				</Bubble>
 
 				<div className="flex flex-wrap gap-2">

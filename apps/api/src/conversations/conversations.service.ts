@@ -1,4 +1,5 @@
-import type { Db } from "@crm/db";
+import { WORKSPACE_ID } from "@crm/auth";
+import type { Db, Prisma } from "@crm/db";
 import { CACHE_MANAGER } from "@nestjs/cache-manager";
 import {
 	BadRequestException,
@@ -6,10 +7,14 @@ import {
 	Injectable,
 	Logger,
 	NotFoundException,
+	Optional,
 } from "@nestjs/common";
 import type { Cache } from "cache-manager";
+import { AgentTriggerService } from "../agent/agent-trigger.service";
 import { InjectDatabase } from "../database/database.constants";
 import type {
+	BuilderConversationCreateInput,
+	BuilderConversationSubmitInput,
 	ConversationEventsInput,
 	ConversationListInput,
 	ConversationSaveInput,
@@ -25,6 +30,24 @@ export interface ConversationSummary {
 	lastMessageAt: string;
 }
 
+export interface BuilderConversationSummary {
+	id: string;
+	sessionId: string | null;
+	continuationToken: string | null;
+	streamIndex: number;
+	title: string | null;
+	messageCount: number;
+	lastMessageAt: string;
+	lastAssistantAt: string | null;
+	unread: boolean;
+	state: "working" | "unread" | "deployed" | "idle";
+	agent: {
+		id: string;
+		name: string;
+		status: string;
+	} | null;
+}
+
 const LIST_TTL_MS = 10 * 60_000;
 
 const listKey = (userId: string, recordId: string) =>
@@ -37,6 +60,7 @@ export class ConversationsService {
 	constructor(
 		@InjectDatabase() private readonly db: Db,
 		@Inject(CACHE_MANAGER) private readonly cache: Cache,
+		@Optional() private readonly agent?: AgentTriggerService,
 	) {}
 
 	async list(
@@ -71,14 +95,439 @@ export class ConversationsService {
 			},
 		});
 
-		const summaries = rows.map((row) => ({
-			...row,
-			lastMessageAt: row.lastMessageAt.toISOString(),
-		}));
+		const summaries = rows.flatMap((row) =>
+			row.sessionId
+				? [
+						{
+							...row,
+							sessionId: row.sessionId,
+							lastMessageAt: row.lastMessageAt.toISOString(),
+						},
+					]
+				: [],
+		);
 
 		await this.cache.set(key, summaries, LIST_TTL_MS);
 
 		return summaries;
+	}
+
+	async listBuilder(userId: string): Promise<BuilderConversationSummary[]> {
+		const rows = await this.db.agentConversation.findMany({
+			where: { userId, kind: "BUILDER" },
+			orderBy: { lastMessageAt: "desc" },
+			take: 50,
+			select: {
+				id: true,
+				sessionId: true,
+				continuationToken: true,
+				streamIndex: true,
+				title: true,
+				messageCount: true,
+				lastMessageAt: true,
+				lastAssistantAt: true,
+				lastReadAt: true,
+				agent: { select: { id: true, name: true, status: true } },
+				_count: {
+					select: {
+						submissions: { where: { commandType: "CREATE_AGENT" } },
+					},
+				},
+				submissions: {
+					where: { status: { in: ["PENDING", "SENDING"] } },
+					select: { id: true },
+					take: 1,
+				},
+			},
+		});
+
+		return rows.map((row) => {
+			const unread = Boolean(
+				row.lastAssistantAt &&
+					(!row.lastReadAt || row.lastAssistantAt > row.lastReadAt),
+			);
+			const working =
+				row.submissions.length > 0 ||
+				Boolean(row.sessionId && !row.continuationToken);
+
+			return {
+				id: row.id,
+				sessionId: row.sessionId,
+				continuationToken: row.continuationToken,
+				streamIndex: row.streamIndex,
+				title: row.title,
+				messageCount: row.messageCount,
+				lastMessageAt: row.lastMessageAt.toISOString(),
+				lastAssistantAt: row.lastAssistantAt?.toISOString() ?? null,
+				unread,
+				state:
+					row._count.submissions > 0 && row.agent?.status === "LIVE"
+						? "deployed"
+						: working
+							? "working"
+							: unread
+								? "unread"
+								: "idle",
+				agent: row.agent,
+			};
+		});
+	}
+
+	async builderResources(q: string, userId: string) {
+		const member = await this.db.member.findUnique({
+			where: {
+				organizationId_userId: { organizationId: WORKSPACE_ID, userId },
+			},
+			select: { id: true },
+		});
+
+		if (!member) {
+			throw new NotFoundException("No workspace membership was found.");
+		}
+
+		const search = q.trim();
+		const contains = search
+			? { contains: search, mode: "insensitive" as const }
+			: undefined;
+
+		const [companies, contacts, deals] = await Promise.all([
+			this.db.company.findMany({
+				where: contains ? { name: contains } : undefined,
+				orderBy: { lastActivityAt: { sort: "desc", nulls: "last" } },
+				take: 6,
+				select: { id: true, name: true, domain: true },
+			}),
+			this.db.contact.findMany({
+				where: contains
+					? {
+							OR: [
+								{ firstName: contains },
+								{ lastName: contains },
+								{ email: contains },
+							],
+						}
+					: undefined,
+				orderBy: { lastActivityAt: { sort: "desc", nulls: "last" } },
+				take: 6,
+				select: {
+					id: true,
+					firstName: true,
+					lastName: true,
+					email: true,
+					company: { select: { name: true } },
+				},
+			}),
+			this.db.deal.findMany({
+				where: contains ? { name: contains } : undefined,
+				orderBy: { lastActivityAt: { sort: "desc", nulls: "last" } },
+				take: 6,
+				select: {
+					id: true,
+					name: true,
+					company: { select: { name: true } },
+				},
+			}),
+		]);
+
+		return [
+			...companies.map((company) => ({
+				kind: "company" as const,
+				id: company.id,
+				label: company.name,
+				detail: company.domain,
+			})),
+			...contacts.map((contact) => ({
+				kind: "contact" as const,
+				id: contact.id,
+				label: [contact.firstName, contact.lastName].filter(Boolean).join(" "),
+				detail: contact.company?.name ?? contact.email,
+			})),
+			...deals.map((deal) => ({
+				kind: "deal" as const,
+				id: deal.id,
+				label: deal.name,
+				detail: deal.company.name,
+			})),
+		];
+	}
+
+	async builderById(id: string, userId: string) {
+		const row = await this.db.agentConversation.findFirst({
+			where: { id, userId, kind: "BUILDER" },
+			select: {
+				id: true,
+				sessionId: true,
+				continuationToken: true,
+				streamIndex: true,
+				title: true,
+				messageCount: true,
+				lastMessageAt: true,
+				lastAssistantAt: true,
+				lastReadAt: true,
+				agent: {
+					select: {
+						id: true,
+						name: true,
+						description: true,
+						status: true,
+						createdBy: { select: { id: true, name: true } },
+						currentVersion: {
+							select: {
+								id: true,
+								number: true,
+								status: true,
+								manifest: true,
+								modelId: true,
+								sandboxPolicy: true,
+								deployedAt: true,
+							},
+						},
+						triggers: {
+							orderBy: { createdAt: "asc" },
+							select: {
+								id: true,
+								type: true,
+								name: true,
+								config: true,
+								enabled: true,
+								nextRunAt: true,
+							},
+						},
+					},
+				},
+				createdVersions: {
+					orderBy: { number: "desc" },
+					take: 1,
+					select: {
+						id: true,
+						number: true,
+						status: true,
+						instructions: true,
+						manifest: true,
+						modelId: true,
+						sandboxPolicy: true,
+						validation: true,
+						createdAt: true,
+					},
+				},
+				feedback: {
+					where: { userId },
+					select: { messageId: true, rating: true },
+				},
+				submissions: {
+					orderBy: { createdAt: "asc" },
+					select: {
+						id: true,
+						clientRequestId: true,
+						commandType: true,
+						message: true,
+						status: true,
+						errorCode: true,
+						errorMessage: true,
+						createdAt: true,
+						sentAt: true,
+						acceptedAt: true,
+					},
+				},
+			},
+		});
+
+		if (!row) {
+			throw new NotFoundException(`No builder conversation with id ${id}.`);
+		}
+
+		return {
+			...row,
+			lastMessageAt: row.lastMessageAt.toISOString(),
+			lastAssistantAt: row.lastAssistantAt?.toISOString() ?? null,
+			lastReadAt: row.lastReadAt?.toISOString() ?? null,
+			agent: row.agent
+				? {
+						...row.agent,
+						currentVersion: row.agent.currentVersion
+							? {
+									...row.agent.currentVersion,
+									deployedAt:
+										row.agent.currentVersion.deployedAt?.toISOString() ?? null,
+								}
+							: null,
+						triggers: row.agent.triggers.map((trigger) => ({
+							...trigger,
+							nextRunAt: trigger.nextRunAt?.toISOString() ?? null,
+						})),
+					}
+				: null,
+			createdVersions: row.createdVersions.map((version) => ({
+				...version,
+				createdAt: version.createdAt.toISOString(),
+			})),
+			submissions: row.submissions.map((submission) => ({
+				...submission,
+				createdAt: submission.createdAt.toISOString(),
+				sentAt: submission.sentAt?.toISOString() ?? null,
+				acceptedAt: submission.acceptedAt?.toISOString() ?? null,
+			})),
+		};
+	}
+
+	async createBuilder(
+		input: BuilderConversationCreateInput,
+		userId: string,
+	): Promise<{ id: string }> {
+		const existing = await this.db.agentConversationSubmission.findUnique({
+			where: { clientRequestId: input.clientRequestId },
+			select: {
+				conversation: { select: { id: true, userId: true, kind: true } },
+			},
+		});
+
+		if (existing) {
+			if (
+				existing.conversation.userId !== userId ||
+				existing.conversation.kind !== "BUILDER"
+			) {
+				throw new BadRequestException("That request has already been used.");
+			}
+
+			return { id: existing.conversation.id };
+		}
+
+		const now = new Date();
+		const conversation = await this.db.agentConversation.create({
+			data: {
+				kind: "BUILDER",
+				userId,
+				title: this.titleFrom(input.message),
+				lastReadAt: now,
+				lastMessageAt: now,
+				submissions: {
+					create: {
+						submittedById: userId,
+						clientRequestId: input.clientRequestId,
+						commandType: input.commandType,
+						message: this.builderMessage(input),
+					},
+				},
+			},
+			select: { id: true },
+		});
+
+		this.agent?.builderConversationQueued();
+
+		return conversation;
+	}
+
+	async submitBuilder(
+		input: BuilderConversationSubmitInput,
+		userId: string,
+	): Promise<{ id: string }> {
+		const existing = await this.db.agentConversationSubmission.findUnique({
+			where: { clientRequestId: input.clientRequestId },
+			select: { id: true, conversationId: true, submittedById: true },
+		});
+
+		if (existing) {
+			if (
+				existing.conversationId !== input.id ||
+				existing.submittedById !== userId
+			) {
+				throw new BadRequestException("That request has already been used.");
+			}
+
+			return { id: existing.id };
+		}
+
+		const conversation = await this.db.agentConversation.findFirst({
+			where: { id: input.id, userId, kind: "BUILDER" },
+			select: { id: true },
+		});
+
+		if (!conversation) {
+			throw new NotFoundException(
+				`No builder conversation with id ${input.id}.`,
+			);
+		}
+
+		const submission = await this.db.$transaction(async (tx) => {
+			const created = await tx.agentConversationSubmission.create({
+				data: {
+					conversationId: input.id,
+					submittedById: userId,
+					clientRequestId: input.clientRequestId,
+					commandType: input.commandType,
+					message: this.builderMessage(input),
+				},
+				select: { id: true },
+			});
+
+			await tx.agentConversation.update({
+				where: { id: input.id },
+				data: { lastMessageAt: new Date(), lastReadAt: new Date() },
+			});
+
+			return created;
+		});
+
+		this.agent?.builderConversationQueued();
+
+		return submission;
+	}
+
+	async markRead(id: string, userId: string): Promise<{ id: string }> {
+		const updated = await this.db.agentConversation.updateMany({
+			where: { id, userId, kind: "BUILDER" },
+			data: { lastReadAt: new Date() },
+		});
+
+		if (updated.count === 0) {
+			throw new NotFoundException(`No builder conversation with id ${id}.`);
+		}
+
+		return { id };
+	}
+
+	async rateBuilderResponse(
+		input: { id: string; messageId: string; rating: "UP" | "DOWN" | null },
+		userId: string,
+	) {
+		const conversation = await this.db.agentConversation.findFirst({
+			where: { id: input.id, userId, kind: "BUILDER" },
+			select: { id: true },
+		});
+
+		if (!conversation) {
+			throw new NotFoundException(
+				`No builder conversation with id ${input.id}.`,
+			);
+		}
+
+		const key = {
+			conversationId_userId_messageId: {
+				conversationId: input.id,
+				userId,
+				messageId: input.messageId,
+			},
+		};
+
+		if (!input.rating) {
+			await this.db.agentConversationFeedback.deleteMany({
+				where: key.conversationId_userId_messageId,
+			});
+			return { id: input.messageId, rating: null };
+		}
+
+		await this.db.agentConversationFeedback.upsert({
+			where: key,
+			create: {
+				conversationId: input.id,
+				userId,
+				messageId: input.messageId,
+				rating: input.rating,
+			},
+			update: { rating: input.rating },
+		});
+
+		return { id: input.messageId, rating: input.rating };
 	}
 
 	async save(
@@ -130,6 +579,8 @@ export class ConversationsService {
 			throw new NotFoundException(`No conversation with id ${input.id}.`);
 		}
 
+		if (!conversation.sessionId) return [];
+
 		const events = await this.db.agentEvent.findMany({
 			where: { sessionId: conversation.sessionId },
 			orderBy: { emittedAt: "asc" },
@@ -161,22 +612,19 @@ export class ConversationsService {
 			throw new NotFoundException(`No conversation with id ${id}.`);
 		}
 
-		await this.db.$transaction([
-			this.db.agentEvent.deleteMany({
-				where: { sessionId: conversation.sessionId },
-			}),
-			this.db.agentConversation.delete({ where: { id } }),
-		]);
+		await this.db.$transaction(async (tx) => {
+			if (conversation.sessionId) {
+				await tx.agentEvent.deleteMany({
+					where: { sessionId: conversation.sessionId },
+				});
+			}
 
-		await this.cache.del(
-			listKey(
-				userId,
-				conversation.contactId ??
-					conversation.companyId ??
-					conversation.dealId ??
-					"",
-			),
-		);
+			await tx.agentConversation.delete({ where: { id } });
+		});
+
+		const recordId =
+			conversation.contactId ?? conversation.companyId ?? conversation.dealId;
+		if (recordId) await this.cache.del(listKey(userId, recordId));
 
 		this.logger.log({ message: "Conversation removed", conversationId: id });
 
@@ -197,5 +645,24 @@ export class ConversationsService {
 		}
 
 		return recordId;
+	}
+
+	private builderMessage(input: {
+		message: string;
+		resources: BuilderConversationCreateInput["resources"];
+		attachments: BuilderConversationCreateInput["attachments"];
+	}): Prisma.InputJsonValue {
+		return {
+			text: input.message,
+			resources: input.resources,
+			attachments: input.attachments,
+		};
+	}
+
+	private titleFrom(message: string): string {
+		const normalized = message.replace(/\s+/g, " ").trim();
+		return normalized.length <= 80
+			? normalized
+			: `${normalized.slice(0, 77).trimEnd()}…`;
 	}
 }
