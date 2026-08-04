@@ -298,14 +298,91 @@ export class AgentDefinitionsService {
 	}
 
 	async remove(id: string, userId: string) {
-		return this.changeStatus(
-			id,
-			userId,
-			"DELETED",
-			"agent.deleted",
-			"Deleted agent",
-			{ deletedAt: new Date() },
-		);
+		await this.access.assertCanManage(id, userId);
+		const now = new Date();
+
+		return this.db.$transaction(async (tx) => {
+			const [current] = await tx.$queryRaw<
+				Array<{ id: string; status: string }>
+			>`
+				SELECT id, status
+				FROM "agentDefinition"
+				WHERE id = ${id}
+				FOR UPDATE
+			`;
+
+			if (!current || current.status === "DELETED") {
+				throw new NotFoundException(`No agent with id ${id}.`);
+			}
+
+			const disabledTriggers = await tx.agentTrigger.updateMany({
+				where: { agentId: id, enabled: true },
+				data: { enabled: false, nextRunAt: null },
+			});
+
+			const cancellableRuns = await tx.$queryRaw<Array<{ id: string }>>`
+				SELECT id
+				FROM "agentRun"
+				WHERE "agentId" = ${id}
+					AND status IN ('QUEUED', 'WAITING_FOR_APPROVAL')
+				ORDER BY id
+				FOR UPDATE
+			`;
+
+			for (const run of cancellableRuns) {
+				const cancelled = await tx.agentRun.update({
+					where: { id: run.id },
+					data: {
+						status: "CANCELLED",
+						finishedAt: now,
+						errorCode: "AGENT_DELETED",
+						errorMessage: "The agent was deleted before this run completed.",
+						nextEventSequence: { increment: 1 },
+					},
+					select: { nextEventSequence: true },
+				});
+
+				await tx.agentRunEvent.create({
+					data: {
+						runId: run.id,
+						sequence: cancelled.nextEventSequence,
+						type: "run.cancelled",
+						data: { reason: "agent.deleted" },
+						emittedAt: now,
+					},
+				});
+			}
+
+			const agent = await tx.agentDefinition.update({
+				where: { id },
+				data: { status: "DELETED", deletedAt: now },
+				select: { id: true, name: true, status: true, updatedAt: true },
+			});
+
+			await tx.agentAuditEvent.create({
+				data: {
+					agentId: id,
+					actorUserId: userId,
+					actorType: "USER",
+					actorId: userId,
+					type: "agent.deleted",
+					summary: "Deleted agent",
+					before: { status: current.status },
+					after: {
+						status: "DELETED",
+						disabledTriggers: disabledTriggers.count,
+						cancelledRuns: cancellableRuns.length,
+					},
+				},
+			});
+
+			return {
+				...agent,
+				updatedAt: agent.updatedAt.toISOString(),
+				disabledTriggers: disabledTriggers.count,
+				cancelledRuns: cancellableRuns.length,
+			};
+		});
 	}
 
 	private async changeStatus(

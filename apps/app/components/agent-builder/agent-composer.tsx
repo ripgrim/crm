@@ -12,6 +12,7 @@ import Email from "@carbon/icons-react/es/Email";
 import Partnership from "@carbon/icons-react/es/Partnership";
 import Search from "@carbon/icons-react/es/Search";
 import User from "@carbon/icons-react/es/User";
+import { AsyncButtonContent } from "@crm/ui/components/async-action";
 import { Button } from "@crm/ui/components/button";
 import { type CarbonIcon, Icon } from "@crm/ui/components/icon";
 import { Input } from "@crm/ui/components/input";
@@ -20,6 +21,8 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "@crm/ui/components/popover";
+import { Skeleton } from "@crm/ui/components/skeleton";
+import { SkeletonSwap } from "@crm/ui/components/skeleton-swap";
 import { cn } from "@crm/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
@@ -215,22 +218,28 @@ export function AgentComposer({
 										}
 									/>
 								))}
-								{(resourceResults.data ?? []).map((resource) => (
-									<ResourceButton
-										key={`${resource.kind}:${resource.id}`}
-										icon={RESOURCE_ICONS[resource.kind]}
-										label={resource.label}
-										detail={resource.detail ?? RESOURCE_LABELS[resource.kind]}
-										onSelect={() => addResource(resource)}
-									/>
-								))}
-								{resourceResults.isSuccess &&
-								connectedGoogle.length === 0 &&
-								resourceResults.data.length === 0 ? (
-									<p className="px-3 py-5 text-center text-muted-foreground text-xs">
-										No matching records.
-									</p>
-								) : null}
+								<SkeletonSwap
+									loading={resourceResults.isFetching}
+									label="CRM records"
+									skeleton={<ResourceResultsSkeleton />}
+								>
+									{(resourceResults.data ?? []).map((resource) => (
+										<ResourceButton
+											key={`${resource.kind}:${resource.id}`}
+											icon={RESOURCE_ICONS[resource.kind]}
+											label={resource.label}
+											detail={resource.detail ?? RESOURCE_LABELS[resource.kind]}
+											onSelect={() => addResource(resource)}
+										/>
+									))}
+									{resourceResults.isSuccess &&
+									connectedGoogle.length === 0 &&
+									resourceResults.data.length === 0 ? (
+										<p className="px-3 py-5 text-center text-muted-foreground text-xs">
+											No matching records.
+										</p>
+									) : null}
+								</SkeletonSwap>
 							</div>
 						</PopoverContent>
 					</Popover>
@@ -303,13 +312,37 @@ export function AgentComposer({
 					variant="default"
 					size="icon-sm"
 					disabled={!canSend}
+					aria-busy={pending}
 					aria-label="Send message"
 					onClick={submit}
 					className="rounded-full"
 				>
-					<Icon icon={ArrowUp} />
+					<AsyncButtonContent
+						status={pending ? "pending" : "idle"}
+						pendingLabel={<span className="sr-only">Sending</span>}
+						successLabel={<span className="sr-only">Sent</span>}
+						errorLabel={<span className="sr-only">Send failed</span>}
+					>
+						<Icon icon={ArrowUp} />
+					</AsyncButtonContent>
 				</Button>
 			</div>
+		</div>
+	);
+}
+
+function ResourceResultsSkeleton() {
+	return (
+		<div className="flex flex-col gap-1 px-3 py-2">
+			{["first", "second", "third"].map((item) => (
+				<div key={item} className="flex h-10 items-center gap-3">
+					<Skeleton className="size-6 shrink-0" />
+					<div className="flex min-w-0 flex-1 flex-col gap-1.5">
+						<Skeleton className="h-3 w-2/3" />
+						<Skeleton className="h-2.5 w-1/3" />
+					</div>
+				</div>
+			))}
 		</div>
 	);
 }

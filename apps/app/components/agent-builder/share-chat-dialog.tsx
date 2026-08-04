@@ -2,6 +2,10 @@
 
 import Close from "@carbon/icons-react/es/Close";
 import Copy from "@carbon/icons-react/es/Copy";
+import {
+	AsyncButtonContent,
+	useAsyncAction,
+} from "@crm/ui/components/async-action";
 import { Button } from "@crm/ui/components/button";
 import {
 	Dialog,
@@ -72,6 +76,14 @@ export function ShareChatDialog({
 		);
 		toast.success("Chat link copied.");
 	};
+	const createAction = useAsyncAction({
+		action: () => create.mutateAsync({ id: conversationId }),
+		onError: () => setChoice(null),
+	});
+	const revokeAction = useAsyncAction({
+		action: () => revoke.mutateAsync({ id: conversationId }),
+	});
+	const copyAction = useAsyncAction({ action: copyLink });
 
 	return (
 		<Dialog
@@ -111,9 +123,10 @@ export function ShareChatDialog({
 					<ShareChoice
 						selected={!shared}
 						label="Only you"
+						disabled={createAction.pending || revokeAction.pending}
 						onSelect={() => {
 							if (shared || status.data?.enabled) {
-								revoke.mutate({ id: conversationId });
+								revokeAction.run();
 							} else {
 								setChoice(false);
 							}
@@ -123,8 +136,9 @@ export function ShareChatDialog({
 						selected={shared}
 						label="Anyone in Comp AI with the link"
 						detail="Read-only"
+						disabled={createAction.pending || revokeAction.pending}
 						onSelect={() => {
-							if (!token) create.mutate({ id: conversationId });
+							if (!token) createAction.run();
 							setChoice(true);
 						}}
 					/>
@@ -141,15 +155,23 @@ export function ShareChatDialog({
 								size="sm"
 								onClick={() => {
 									if (token) {
-										void copyLink();
+										copyAction.run();
 									} else {
-										create.mutate({ id: conversationId });
+										createAction.run();
 									}
 								}}
-								disabled={create.isPending}
+								disabled={createAction.pending || copyAction.pending}
+								aria-busy={createAction.pending || copyAction.pending}
 							>
-								{token ? <Icon icon={Copy} data-icon="inline-start" /> : null}
-								{token ? "Copy link" : "Replace link"}
+								<AsyncButtonContent
+									status={token ? copyAction.status : createAction.status}
+									pendingLabel={token ? "Copying" : "Creating link"}
+									successLabel={token ? "Copied" : "Link created"}
+									errorLabel="Try again"
+								>
+									{token ? <Icon icon={Copy} data-icon="inline-start" /> : null}
+									{token ? "Copy link" : "Replace link"}
+								</AsyncButtonContent>
 							</Button>
 						</div>
 					) : null}
@@ -162,10 +184,18 @@ export function ShareChatDialog({
 				<DialogFooter className="flex-row items-center justify-between border-t p-4 px-5">
 					<Button
 						variant="ghost"
-						onClick={() => revoke.mutate({ id: conversationId })}
-						disabled={!shared || revoke.isPending}
+						onClick={() => revokeAction.run()}
+						disabled={!shared || revokeAction.pending}
+						aria-busy={revokeAction.pending}
 					>
-						Revoke link
+						<AsyncButtonContent
+							status={revokeAction.status}
+							pendingLabel="Revoking"
+							successLabel="Revoked"
+							errorLabel="Try again"
+						>
+							Revoke link
+						</AsyncButtonContent>
 					</Button>
 					<div className="flex gap-3">
 						<DialogClose asChild>
@@ -185,11 +215,13 @@ function ShareChoice({
 	selected,
 	label,
 	detail,
+	disabled = false,
 	onSelect,
 }: {
 	selected: boolean;
 	label: string;
 	detail?: string;
+	disabled?: boolean;
 	onSelect: () => void;
 }) {
 	return (
@@ -197,12 +229,14 @@ function ShareChoice({
 			className={cn(
 				"flex h-12 w-full cursor-pointer items-center gap-2.5 rounded-md border px-2.5 text-left outline-none focus-within:ring-2 focus-within:ring-ring/60",
 				selected && "border-muted-foreground/60 bg-muted",
+				disabled && "cursor-not-allowed opacity-50",
 			)}
 		>
 			<input
 				type="radio"
 				name="chat-sharing"
 				checked={selected}
+				disabled={disabled}
 				onChange={onSelect}
 				className="sr-only"
 			/>

@@ -3,13 +3,35 @@
 import ChevronDown from "@carbon/icons-react/es/ChevronDown";
 import ChevronUp from "@carbon/icons-react/es/ChevronUp";
 import Download from "@carbon/icons-react/es/Download";
+import OverflowMenuVertical from "@carbon/icons-react/es/OverflowMenuVertical";
 import Pause from "@carbon/icons-react/es/Pause";
 import Play from "@carbon/icons-react/es/Play";
-import Renew from "@carbon/icons-react/es/Renew";
+import TrashCan from "@carbon/icons-react/es/TrashCan";
+import {
+	AlertDialog,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@crm/ui/components/alert-dialog";
+import {
+	AsyncButtonContent,
+	useAsyncAction,
+} from "@crm/ui/components/async-action";
 import { Button } from "@crm/ui/components/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@crm/ui/components/dropdown-menu";
 import { Icon } from "@crm/ui/components/icon";
+import { Skeleton } from "@crm/ui/components/skeleton";
 import { cn } from "@crm/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc/client";
@@ -72,15 +94,38 @@ export function TeamAgentDetail({ agentId }: { agentId: string }) {
 			onError: (error) => toast.error(error.message),
 		}),
 	);
+	const runAction = useAsyncAction({
+		action: () =>
+			runNow.mutateAsync({
+				id: agentId,
+				clientRequestId: crypto.randomUUID(),
+			}),
+	});
+	const pauseAction = useAsyncAction({
+		action: () => pause.mutateAsync({ id: agentId }),
+	});
+	const resumeAction = useAsyncAction({
+		action: () => resume.mutateAsync({ id: agentId }),
+	});
 
 	if (agent.isPending) {
 		return (
-			<main className="flex flex-1 items-center justify-center">
-				<Icon
-					icon={Renew}
-					className="size-4 animate-spin text-muted-foreground"
-					motion="none"
-				/>
+			<main
+				className="min-h-0 min-w-0 flex-1 overflow-hidden px-4 py-6 sm:px-6 sm:py-10"
+				aria-busy="true"
+			>
+				<div className="mx-auto flex w-full max-w-[1040px] flex-col gap-6">
+					<div className="flex flex-col gap-3">
+						<Skeleton className="h-8 w-72 max-w-full" />
+						<Skeleton className="h-4 w-[520px] max-w-full" />
+						<Skeleton className="h-3 w-56 max-w-full" />
+					</div>
+					<Skeleton className="h-9 w-full" />
+					<Skeleton className="h-56 w-full" />
+				</div>
+				<span role="status" className="sr-only">
+					Loading agent
+				</span>
 			</main>
 		);
 	}
@@ -120,36 +165,58 @@ export function TeamAgentDetail({ agentId }: { agentId: string }) {
 						<div className="mt-1 flex flex-wrap gap-2">
 							<Button
 								variant="outline"
-								disabled={data.status !== "LIVE" || runNow.isPending}
-								onClick={() =>
-									runNow.mutate({
-										id: data.id,
-										clientRequestId: crypto.randomUUID(),
-									})
-								}
+								disabled={data.status !== "LIVE" || runAction.pending}
+								aria-busy={runAction.pending}
+								onClick={() => runAction.run()}
 							>
-								<Icon icon={Play} data-icon="inline-start" />
-								Run now
+								<AsyncButtonContent
+									status={runAction.status}
+									pendingLabel="Queueing"
+									successLabel="Queued"
+									errorLabel="Try again"
+								>
+									<Icon icon={Play} data-icon="inline-start" />
+									Run now
+								</AsyncButtonContent>
 							</Button>
 							{data.canManage && data.status === "LIVE" ? (
 								<Button
 									variant="outline"
-									disabled={pause.isPending}
-									onClick={() => pause.mutate({ id: data.id })}
+									disabled={pauseAction.pending}
+									aria-busy={pauseAction.pending}
+									onClick={() => pauseAction.run()}
 								>
-									<Icon icon={Pause} data-icon="inline-start" />
-									Pause
+									<AsyncButtonContent
+										status={pauseAction.status}
+										pendingLabel="Pausing"
+										successLabel="Paused"
+										errorLabel="Try again"
+									>
+										<Icon icon={Pause} data-icon="inline-start" />
+										Pause
+									</AsyncButtonContent>
 								</Button>
 							) : null}
 							{data.canManage && data.status === "PAUSED" ? (
 								<Button
 									variant="outline"
-									disabled={resume.isPending}
-									onClick={() => resume.mutate({ id: data.id })}
+									disabled={resumeAction.pending}
+									aria-busy={resumeAction.pending}
+									onClick={() => resumeAction.run()}
 								>
-									<Icon icon={Play} data-icon="inline-start" />
-									Resume
+									<AsyncButtonContent
+										status={resumeAction.status}
+										pendingLabel="Resuming"
+										successLabel="Resumed"
+										errorLabel="Try again"
+									>
+										<Icon icon={Play} data-icon="inline-start" />
+										Resume
+									</AsyncButtonContent>
 								</Button>
+							) : null}
+							{data.canManage ? (
+								<DeleteAgentAction agentId={data.id} name={data.name} />
 							) : null}
 						</div>
 					</div>
@@ -186,6 +253,106 @@ export function TeamAgentDetail({ agentId }: { agentId: string }) {
 				) : null}
 			</div>
 		</main>
+	);
+}
+
+function DeleteAgentAction({
+	agentId,
+	name,
+}: {
+	agentId: string;
+	name: string;
+}) {
+	const trpc = useTRPC();
+	const queryClient = useQueryClient();
+	const router = useRouter();
+	const [confirming, setConfirming] = useState(false);
+	const remove = useMutation(
+		trpc.agents.remove.mutationOptions({
+			onSuccess: async () => {
+				await Promise.all([
+					queryClient.invalidateQueries({
+						queryKey: trpc.agents.list.pathKey(),
+					}),
+					queryClient.invalidateQueries({
+						queryKey: trpc.agents.byId.pathKey(),
+						refetchType: "none",
+					}),
+				]);
+				setConfirming(false);
+				toast.success(`${name} was deleted.`);
+				router.replace("/agents");
+			},
+			onError: (error) => toast.error(error.message),
+		}),
+	);
+	const removeAction = useAsyncAction({
+		action: () => remove.mutateAsync({ id: agentId }),
+	});
+
+	return (
+		<>
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						disabled={removeAction.pending}
+					>
+						<Icon icon={OverflowMenuVertical} />
+						<span className="sr-only">More agent actions</span>
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end">
+					<DropdownMenuItem
+						variant="destructive"
+						onSelect={() => setConfirming(true)}
+					>
+						<Icon icon={TrashCan} />
+						Delete agent
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+
+			<AlertDialog
+				open={confirming}
+				onOpenChange={(open) => {
+					if (!removeAction.pending) setConfirming(open);
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Delete {name}?</AlertDialogTitle>
+						<AlertDialogDescription>
+							This removes it from the team agent list, disables its triggers,
+							and cancels queued runs. Its run and action history stays in the
+							audit log. A run already in progress may finish.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={removeAction.pending}>
+							Cancel
+						</AlertDialogCancel>
+						<Button
+							variant="destructive"
+							disabled={removeAction.pending}
+							aria-busy={removeAction.pending}
+							onClick={() => removeAction.run()}
+						>
+							<AsyncButtonContent
+								status={removeAction.status}
+								pendingLabel="Deleting"
+								successLabel="Deleted"
+								errorLabel="Try again"
+							>
+								Delete agent
+							</AsyncButtonContent>
+						</Button>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+		</>
 	);
 }
 

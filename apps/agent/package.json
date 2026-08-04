@@ -6,8 +6,8 @@
 	"license": "MIT",
 	"scripts": {
 		"backfill:images": "bun scripts/backfill-brand-images.ts",
-		"dev": "eve dev --no-ui",
-		"dev:tui": "eve dev",
+		"dev": "eve dev",
+		"dev:headless": "eve dev --no-ui",
 		"dispatch": "curl -fsS -X POST \"${AGENT_URL:-http://127.0.0.1:2000}/eve/v1/dev/schedules/dispatch\"",
 		"build": "eve build",
 		"start": "eve start",

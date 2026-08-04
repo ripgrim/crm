@@ -10,9 +10,15 @@ import Renew from "@carbon/icons-react/es/Renew";
 import ThumbsDown from "@carbon/icons-react/es/ThumbsDown";
 import ThumbsUp from "@carbon/icons-react/es/ThumbsUp";
 import WarningAlt from "@carbon/icons-react/es/WarningAlt";
+import {
+	AsyncButtonContent,
+	useAsyncAction,
+} from "@crm/ui/components/async-action";
 import { Button } from "@crm/ui/components/button";
 import { Icon } from "@crm/ui/components/icon";
 import { Markdown } from "@crm/ui/components/markdown";
+import { Skeleton } from "@crm/ui/components/skeleton";
+import { TaskSteps } from "@crm/ui/components/task-steps";
 import { cn } from "@crm/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MessageStreamEvent } from "eve/client";
@@ -528,17 +534,44 @@ function BuildingAgentCard({
 	sessionId: string | null;
 	eventCount: number;
 }) {
-	const [stopping, setStopping] = useState(false);
 	const completed = Math.min(
 		3,
 		sessionId ? Math.max(1, Math.floor(eventCount / 4)) : 0,
 	);
 	const steps = [
-		["Read the CRM data model", "Companies · contacts · deals"],
-		["Resolved the requested records", "Scoped to this workspace"],
-		["Checked connected integrations", "Only available connections"],
-		["Preparing the agent", "Isolated Vercel Sandbox"],
+		{
+			id: "data-model",
+			label: "Read the CRM data model",
+			meta: "Companies · contacts · deals",
+		},
+		{
+			id: "records",
+			label: "Resolved the requested records",
+			meta: "Scoped to this workspace",
+		},
+		{
+			id: "integrations",
+			label: "Checked connected integrations",
+			meta: "Only available connections",
+		},
+		{
+			id: "sandbox",
+			label: "Preparing the agent",
+			meta: "Isolated Vercel Sandbox",
+		},
 	] as const;
+	const stop = useAsyncAction({
+		action: async () => {
+			if (!sessionId) return;
+			const response = await fetch(`/eve/v1/session/${sessionId}/cancel`, {
+				method: "POST",
+				headers: { "x-crm-builder-conversation": conversationId },
+			});
+			if (!response.ok) throw new Error(await response.text());
+		},
+		onSuccess: () => toast.success("Stop requested."),
+		onError: () => toast.error("The agent could not be stopped. Try again."),
+	});
 
 	return (
 		<div className="flex flex-col gap-4">
@@ -562,53 +595,25 @@ function BuildingAgentCard({
 					<Button
 						variant="outline"
 						size="sm"
-						disabled={!sessionId || stopping}
-						onClick={() => {
-							if (!sessionId) return;
-							setStopping(true);
-							void fetch(`/eve/v1/session/${sessionId}/cancel`, {
-								method: "POST",
-								headers: { "x-crm-builder-conversation": conversationId },
-							})
-								.then(async (response) => {
-									if (!response.ok) {
-										throw new Error(await response.text());
-									}
-									toast.success("Stop requested.");
-								})
-								.catch(() => {
-									setStopping(false);
-									toast.error("The agent could not be stopped. Try again.");
-								});
-						}}
+						disabled={!sessionId || stop.pending}
+						aria-busy={stop.pending}
+						onClick={() => stop.run()}
 					>
-						{stopping ? "Stopping" : "Stop"}
+						<AsyncButtonContent
+							status={stop.status}
+							pendingLabel="Stopping"
+							successLabel="Stopping"
+							errorLabel="Try again"
+						>
+							Stop
+						</AsyncButtonContent>
 					</Button>
 				</div>
-				{steps.map(([label, detail], index) => (
-					<div
-						key={label}
-						className="flex min-h-10 items-start gap-3 border-t px-4 py-2.5 first:border-t-0 sm:h-8 sm:min-h-0 sm:items-center sm:gap-4 sm:px-5 sm:py-0"
-					>
-						<span className="flex size-5 shrink-0 items-center justify-center">
-							{index < completed ? (
-								<Icon icon={Checkmark} className="size-3.5 text-ring" />
-							) : index === completed ? (
-								<Icon
-									icon={Renew}
-									className="size-3.5 animate-spin text-muted-foreground"
-									motion="none"
-								/>
-							) : null}
-						</span>
-						<span className="min-w-0 flex-1 wrap-break-word text-sm">
-							{label}
-						</span>
-						<span className="min-w-0 max-w-[45%] text-right text-muted-foreground text-xs sm:w-60 sm:max-w-none sm:shrink-0">
-							{detail}
-						</span>
-					</div>
-				))}
+				<TaskSteps
+					steps={[...steps]}
+					current={completed}
+					label="Agent creation"
+				/>
 				<p className="border-t px-4 py-3 text-muted-foreground text-xs sm:px-5">
 					This chat keeps running if you leave. You’ll see a dot in the sidebar
 					when there’s a response.
@@ -659,9 +664,15 @@ function BuilderFailureCard({
 					variant="outline"
 					size="sm"
 					disabled={retrying}
+					aria-busy={retrying}
 					onClick={onRetry}
 				>
-					Try again
+					<AsyncButtonContent
+						status={retrying ? "pending" : "idle"}
+						pendingLabel="Retrying"
+					>
+						Try again
+					</AsyncButtonContent>
 				</Button>
 			) : null}
 		</div>
@@ -736,6 +747,7 @@ function ReviewAgentCard({ conversation }: { conversation: Conversation }) {
 						</Button>
 						<Button
 							disabled={deploy.isPending}
+							aria-busy={deploy.isPending}
 							onClick={() =>
 								deploy.mutate({
 									id: agent.id,
@@ -744,7 +756,22 @@ function ReviewAgentCard({ conversation }: { conversation: Conversation }) {
 								})
 							}
 						>
-							{deploy.isPending ? "Creating…" : "Create agent"}
+							<AsyncButtonContent
+								status={
+									deploy.isPending
+										? "pending"
+										: deploy.isError
+											? "error"
+											: deploy.isSuccess
+												? "success"
+												: "idle"
+								}
+								pendingLabel="Creating"
+								successLabel="Created"
+								errorLabel="Try again"
+							>
+								Create agent
+							</AsyncButtonContent>
 						</Button>
 					</div>
 				</div>
@@ -787,6 +814,13 @@ function DeployedAgentCard({
 			onError: (error) => toast.error(error.message),
 		}),
 	);
+	const runAction = useAsyncAction({
+		action: () =>
+			run.mutateAsync({
+				id: agent?.id ?? "",
+				clientRequestId: crypto.randomUUID(),
+			}),
+	});
 
 	if (!agent) return null;
 	const nextRun = agent.triggers.find((trigger) => trigger.enabled)?.nextRunAt;
@@ -833,13 +867,19 @@ function DeployedAgentCard({
 					<Button
 						variant="outline"
 						size="sm"
-						disabled={run.isPending}
-						onClick={() =>
-							run.mutate({ id: agent.id, clientRequestId: crypto.randomUUID() })
-						}
+						disabled={runAction.pending}
+						aria-busy={runAction.pending}
+						onClick={() => runAction.run()}
 					>
-						<Icon icon={Play} data-icon="inline-start" />
-						Run now
+						<AsyncButtonContent
+							status={runAction.status}
+							pendingLabel="Queueing"
+							successLabel="Queued"
+							errorLabel="Try again"
+						>
+							<Icon icon={Play} data-icon="inline-start" />
+							Run now
+						</AsyncButtonContent>
 					</Button>
 				</div>
 			</div>
@@ -897,12 +937,23 @@ function DeployedStat({
 
 function ChatLoading() {
 	return (
-		<main className="flex flex-1 items-center justify-center">
-			<Icon
-				icon={Renew}
-				className="size-4 animate-spin text-muted-foreground"
-				motion="none"
-			/>
+		<main className="flex min-h-0 flex-1 flex-col" aria-busy="true">
+			<header className="flex h-12 shrink-0 items-center border-b px-5">
+				<Skeleton className="h-4 w-40" />
+			</header>
+			<div className="min-h-0 flex-1 overflow-hidden">
+				<div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 py-6 sm:px-5 sm:py-9">
+					<Skeleton className="ml-auto h-16 w-2/3 max-w-[520px]" />
+					<div className="flex max-w-[640px] flex-col gap-2">
+						<Skeleton className="h-4 w-full" />
+						<Skeleton className="h-4 w-11/12" />
+						<Skeleton className="h-4 w-8/12" />
+					</div>
+				</div>
+			</div>
+			<span role="status" className="sr-only">
+				Loading chat
+			</span>
 		</main>
 	);
 }

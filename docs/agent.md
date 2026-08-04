@@ -741,23 +741,17 @@ silently ignored.
 
 ## Watching it work
 
-`eve dev` shows every tool call, every result and every token — but only in its
-interactive TUI, and under `bun run dev` that TUI is unreadable. Turbo gives each
-task a pty, so eve believes it owns a terminal and paints a full-screen UI into a
-pane that turbo is also drawing; the two redraws interleave and what a rep of the
-agent's work actually looks like is `Building your agent compiling
-agent[agent] on  LinkedIn (RAPIDAPI_KEY)`. The prompt at the bottom is real and
-you cannot type at it usefully either.
+`eve dev` shows every tool call, every result and every token in its interactive
+TUI, and it is the agent package's default `dev` command. The package's Turbo
+task is explicitly interactive, so select the agent pane and press Enter to hand
+stdin to eve. Type `/traces` to open the live trace viewer; Ctrl+Z returns input
+to Turbo.
 
-So **`dev` is `eve dev --no-ui`**, and `dev:tui` keeps the interactive one for
-when you run the agent on its own and want to talk to it. `--no-ui` changes
-nothing about the server — same port, same routes, same watcher — it only stops
-eve taking over the terminal, which is the whole of the problem.
-
-That leaves nothing narrating the session, and `hooks/activity.ts` is that
-narration: a line per tool call with its arguments, a line per result with how
-long it took, the finish reason and token spend of each step, and any failure
-with its code.
+`dev:headless` keeps `eve dev --no-ui` available when a terminal cannot render
+the nested TUI. It starts the same server on the same port with the same routes
+and watcher. In that mode `hooks/activity.ts` narrates the session instead: a
+line per tool call with its arguments, a line per result with how long it took,
+the finish reason and token spend of each step, and any failure with its code.
 
 - **The lines go to stderr, not stdout.** The TUI's default log mode is `stderr`
   and it keeps stdout buffered and hidden, so a `console.log` here would be
@@ -782,17 +776,16 @@ with its code.
 record, so keep the turbo scrollback rather than going looking for a file that
 was never written.
 
-Two consequences of running headless, both worth recognising rather than
-debugging:
+Two consequences of opting into `dev:headless`, both worth recognising rather
+than debugging:
 
-- **A second `bun run dev` fails the whole turbo run.** An interactive `eve dev`
-  reconnects to a local server that is already up; a headless one rejects it and
-  exits non-zero, and turbo then tears down the other tasks in *that*
-  invocation — the first one keeps running untouched. `A dev server is already
-  running for this eve agent` means exactly what it says: you already have one.
-  Use the terminal it is in, or stop it before starting another.
+- **A headless dev process cannot reconnect.** An interactive `eve dev`
+  reconnects to a local server that is already up; `dev:headless` rejects it and
+  exits non-zero. `A dev server is already running for this eve agent` means
+  exactly what it says: use the terminal it is in, or stop it before starting
+  another.
 - **An orphaned agent holds the port.** If turbo dies without reaping its child,
-  nothing on screen says so and every later `bun run dev` fails the same way.
+  nothing on screen says so and every later `dev:headless` fails the same way.
   `lsof -nP -iTCP:2000 -sTCP:LISTEN` names the process to kill.
 
 ### Nothing is researching, and the queue only grows

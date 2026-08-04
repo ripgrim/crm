@@ -137,17 +137,34 @@ export class AgentRunsService {
 			return { id: existing.id };
 		}
 
-		const agent = await this.readableAgent(input.id, userId);
-		if (agent.status !== "LIVE" || !agent.currentVersionId) {
-			throw new BadRequestException("This agent is not live yet.");
-		}
-		const versionId = agent.currentVersionId;
+		await this.access.assertMember(userId);
 
 		const run = await this.db.$transaction(async (tx) => {
+			const [agent] = await tx.$queryRaw<
+				Array<{
+					id: string;
+					status: string;
+					currentVersionId: string | null;
+				}>
+			>`
+				SELECT id, status, "currentVersionId"
+				FROM "agentDefinition"
+				WHERE id = ${input.id}
+				FOR UPDATE
+			`;
+
+			if (!agent || agent.status === "DELETED") {
+				throw new NotFoundException(`No agent with id ${input.id}.`);
+			}
+
+			if (agent.status !== "LIVE" || !agent.currentVersionId) {
+				throw new BadRequestException("This agent is not live yet.");
+			}
+
 			const created = await tx.agentRun.create({
 				data: {
 					agentId: input.id,
-					versionId,
+					versionId: agent.currentVersionId,
 					initiatedById: userId,
 					triggerType: "MANUAL",
 					idempotencyKey: input.clientRequestId,
@@ -162,7 +179,7 @@ export class AgentRunsService {
 			await tx.agentAuditEvent.create({
 				data: {
 					agentId: input.id,
-					versionId,
+					versionId: agent.currentVersionId,
 					actorUserId: userId,
 					actorType: "USER",
 					actorId: userId,
