@@ -62,8 +62,8 @@ export function AgentBuilderHome({ name }: { name: string }) {
 					onSubmit={submit}
 				/>
 				<p className="flex h-8 items-center px-px text-muted-foreground text-xs">
-					Chats stay private to you. Agents you create are available to the
-					whole team.
+					Chats and agent drafts stay private to you. Deploying an agent makes
+					it available to the whole team.
 				</p>
 
 				<div className="pt-1">

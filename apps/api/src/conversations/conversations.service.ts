@@ -195,7 +195,7 @@ export class ConversationsService {
 				where: contains ? { name: contains } : undefined,
 				orderBy: { lastActivityAt: { sort: "desc", nulls: "last" } },
 				take: 6,
-				select: { id: true, name: true, domain: true },
+				select: { id: true, name: true, domain: true, logoUrl: true },
 			}),
 			this.db.contact.findMany({
 				where: contains
@@ -214,6 +214,7 @@ export class ConversationsService {
 					firstName: true,
 					lastName: true,
 					email: true,
+					imageUrl: true,
 					company: { select: { name: true } },
 				},
 			}),
@@ -224,7 +225,7 @@ export class ConversationsService {
 				select: {
 					id: true,
 					name: true,
-					company: { select: { name: true } },
+					company: { select: { name: true, logoUrl: true } },
 				},
 			}),
 		]);
@@ -235,18 +236,21 @@ export class ConversationsService {
 				id: company.id,
 				label: company.name,
 				detail: company.domain,
+				imageUrl: company.logoUrl,
 			})),
 			...contacts.map((contact) => ({
 				kind: "contact" as const,
 				id: contact.id,
 				label: [contact.firstName, contact.lastName].filter(Boolean).join(" "),
 				detail: contact.company?.name ?? contact.email,
+				imageUrl: contact.imageUrl,
 			})),
 			...deals.map((deal) => ({
 				kind: "deal" as const,
 				id: deal.id,
 				label: deal.name,
 				detail: deal.company.name,
+				imageUrl: deal.company.logoUrl,
 			})),
 		];
 	}
@@ -310,6 +314,21 @@ export class ConversationsService {
 						createdAt: true,
 					},
 				},
+				builderArtifacts: {
+					orderBy: [{ createdAt: "desc" }, { revision: "desc" }],
+					take: 100,
+					select: {
+						id: true,
+						versionId: true,
+						path: true,
+						language: true,
+						content: true,
+						previousContent: true,
+						revision: true,
+						status: true,
+						createdAt: true,
+					},
+				},
 				feedback: {
 					where: { userId },
 					select: { messageId: true, rating: true },
@@ -360,6 +379,10 @@ export class ConversationsService {
 			createdVersions: row.createdVersions.map((version) => ({
 				...version,
 				createdAt: version.createdAt.toISOString(),
+			})),
+			builderArtifacts: row.builderArtifacts.map((artifact) => ({
+				...artifact,
+				createdAt: artifact.createdAt.toISOString(),
 			})),
 			submissions: row.submissions.map((submission) => ({
 				...submission,

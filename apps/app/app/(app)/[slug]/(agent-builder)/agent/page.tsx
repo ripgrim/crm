@@ -7,5 +7,5 @@ export default async function AgentBuilderPage({
 	params: Promise<{ slug: string }>;
 }) {
 	const { slug } = await params;
-	redirect(workspaceUrl(slug, "/agents"));
+	redirect(workspaceUrl(slug, "/chat"));
 }

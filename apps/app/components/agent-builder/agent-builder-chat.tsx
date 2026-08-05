@@ -1,14 +1,18 @@
 "use client";
 
 import Add from "@carbon/icons-react/es/Add";
+import Application from "@carbon/icons-react/es/Application";
 import ArrowRight from "@carbon/icons-react/es/ArrowRight";
+import Building from "@carbon/icons-react/es/Building";
 import Checkmark from "@carbon/icons-react/es/Checkmark";
 import CheckmarkFilled from "@carbon/icons-react/es/CheckmarkFilled";
 import Copy from "@carbon/icons-react/es/Copy";
+import Partnership from "@carbon/icons-react/es/Partnership";
 import Play from "@carbon/icons-react/es/Play";
 import Renew from "@carbon/icons-react/es/Renew";
 import ThumbsDown from "@carbon/icons-react/es/ThumbsDown";
 import ThumbsUp from "@carbon/icons-react/es/ThumbsUp";
+import User from "@carbon/icons-react/es/User";
 import WarningAlt from "@carbon/icons-react/es/WarningAlt";
 import {
 	AsyncButtonContent,
@@ -26,7 +30,10 @@ import { useEveAgent } from "eve/react";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
-import { hasCreateAgentCommand } from "@/lib/agent-builder";
+import {
+	consumeBuilderCommand,
+	hasCreateAgentCommand,
+} from "@/lib/agent-builder";
 import {
 	type AgentTurnFailure,
 	latestTurnFailure,
@@ -35,7 +42,13 @@ import {
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/types";
 import { useWorkspaceUrl } from "@/lib/use-workspace-url";
+import { AgentCodeWorkspace } from "./agent-code-workspace";
 import { AgentComposer, type BuilderPrompt } from "./agent-composer";
+import {
+	ChatAttachmentChip,
+	ChatCommandChip,
+	ChatReferenceChip,
+} from "./chat-chips";
 import { ShareChatDialog } from "./share-chat-dialog";
 
 type Conversation = RouterOutputs["conversations"]["builderById"];
@@ -124,7 +137,7 @@ export function AgentBuilderChat({
 						{conversation.error.message}
 					</p>
 					<Button asChild variant="outline" className="mt-5">
-						<Link href={workspaceUrl("/agents")}>Start a new chat</Link>
+						<Link href={workspaceUrl("/chat")}>Start a new chat</Link>
 					</Button>
 				</div>
 			</main>
@@ -170,7 +183,7 @@ export function AgentBuilderChat({
 					{submissions.map((submission) => (
 						<UserSubmission
 							key={submission.id}
-							message={submissionText(submission.message)}
+							submission={submission}
 							failed={submission.status === "FAILED"}
 							error={submission.errorMessage}
 						/>
@@ -188,7 +201,14 @@ export function AgentBuilderChat({
 						<BuildingAgentCard
 							conversationId={conversationId}
 							sessionId={data.sessionId}
-							eventCount={events.data?.length ?? 0}
+							artifacts={data.builderArtifacts}
+						/>
+					) : null}
+
+					{creatingAgent && data.builderArtifacts.length > 0 ? (
+						<AgentCodeWorkspace
+							artifacts={data.builderArtifacts}
+							working={working}
 						/>
 					) : null}
 
@@ -278,7 +298,7 @@ function SharedAgentChat({
 					{submissions.map((submission) => (
 						<UserSubmission
 							key={submission.id}
-							message={submissionText(submission.message)}
+							submission={submission}
 							failed={submission.status === "FAILED"}
 							error={submission.errorMessage}
 						/>
@@ -286,6 +306,13 @@ function SharedAgentChat({
 
 					{events.length > 0 ? (
 						<SharedAssistantTranscript events={events} />
+					) : null}
+
+					{conversation.builderArtifacts.length > 0 ? (
+						<AgentCodeWorkspace
+							artifacts={conversation.builderArtifacts}
+							working={false}
+						/>
 					) : null}
 				</div>
 			</div>
@@ -370,7 +397,7 @@ function ChatHeader({
 				) : null}
 			</div>
 			<Button asChild variant="ghost" size="icon-sm">
-				<Link href={workspaceUrl("/agents")} aria-label="Start a new chat">
+				<Link href={workspaceUrl("/chat")} aria-label="Start a new chat">
 					<Icon icon={Add} />
 				</Link>
 			</Button>
@@ -380,18 +407,47 @@ function ChatHeader({
 }
 
 function UserSubmission({
-	message,
+	submission,
 	failed,
 	error,
 }: {
-	message: string;
+	submission: BuilderSubmission;
 	failed: boolean;
 	error: string | null;
 }) {
+	const message = builderMessageOf(submission.message);
+	const command =
+		submission.commandType === "CREATE_AGENT"
+			? consumeBuilderCommand(message.text)
+			: null;
+	const text = command?.body ?? message.text;
+
 	return (
 		<div className="flex min-w-0 w-full justify-end">
-			<div className="w-fit min-w-0 max-w-full rounded-md bg-muted px-3 py-2.5 text-sm leading-5 sm:max-w-[620px] sm:px-3.5 sm:py-3">
-				<p className="wrap-break-word">{message}</p>
+			<div className="flex w-fit min-w-0 max-w-full flex-col gap-2 rounded-md bg-muted px-3 py-2.5 text-sm leading-5 sm:max-w-[620px] sm:px-3.5 sm:py-3">
+				{submission.commandType === "CREATE_AGENT" ? (
+					<div className="flex flex-wrap gap-1">
+						<ChatCommandChip label="Create agent" icon={Application} />
+					</div>
+				) : null}
+				<p className="wrap-break-word">{text}</p>
+				{message.resources.length > 0 || message.attachments.length > 0 ? (
+					<div className="flex flex-wrap gap-1 pt-1">
+						{message.resources.map((resource) => (
+							<ChatReferenceChip
+								key={`${resource.kind}:${resource.id}`}
+								resource={resource}
+								icon={RESOURCE_ICONS[resource.kind]}
+							/>
+						))}
+						{message.attachments.map((attachment) => (
+							<ChatAttachmentChip
+								key={`${attachment.name}:${attachment.size}`}
+								attachment={attachment}
+							/>
+						))}
+					</div>
+				) : null}
 				{failed ? (
 					<p className="mt-2 text-destructive text-xs">
 						{error ?? "This message could not be sent."}
@@ -531,36 +587,42 @@ function ResponseActions({
 function BuildingAgentCard({
 	conversationId,
 	sessionId,
-	eventCount,
+	artifacts,
 }: {
 	conversationId: string;
 	sessionId: string | null;
-	eventCount: number;
+	artifacts: Conversation["builderArtifacts"];
 }) {
-	const completed = Math.min(
-		3,
-		sessionId ? Math.max(1, Math.floor(eventCount / 4)) : 0,
-	);
+	const paths = new Set(artifacts.map((artifact) => artifact.path));
+	const completed = paths.has("agent/README.md")
+		? 4
+		: paths.has("agent/manifest.json")
+			? 3
+			: paths.has("agent/instructions.md")
+				? 2
+				: sessionId
+					? 1
+					: 0;
 	const steps = [
 		{
-			id: "data-model",
-			label: "Read the CRM data model",
-			meta: "Companies · contacts · deals",
+			id: "context",
+			label: "Inspect the requested scope",
+			meta: "CRM records and connected sources",
 		},
 		{
-			id: "records",
-			label: "Resolved the requested records",
-			meta: "Scoped to this workspace",
+			id: "instructions",
+			label: "Write the agent instructions",
+			meta: "Trigger, boundaries, and stopping rules",
 		},
 		{
-			id: "integrations",
-			label: "Checked connected integrations",
-			meta: "Only available connections",
+			id: "manifest",
+			label: "Define the agent manifest",
+			meta: "Data scope and allowed actions",
 		},
 		{
-			id: "sandbox",
-			label: "Preparing the agent",
-			meta: "Isolated Vercel Sandbox",
+			id: "review",
+			label: "Prepare the private draft",
+			meta: "Saved for your review",
 		},
 	] as const;
 	const stop = useAsyncAction({
@@ -702,7 +764,7 @@ function ReviewAgentCard({ conversation }: { conversation: Conversation }) {
 						queryKey: trpc.agents.list.pathKey(),
 					}),
 				]);
-				toast.success("Agent created for the team.");
+				toast.success("Agent deployed to the team.");
 			},
 			onError: (error) => toast.error(error.message),
 		}),
@@ -713,8 +775,8 @@ function ReviewAgentCard({ conversation }: { conversation: Conversation }) {
 	return (
 		<div className="flex flex-col gap-5">
 			<p className="max-w-[640px] text-pretty text-sm leading-5">
-				I’ve drafted the agent. Review its scope before I create and deploy it
-				for the team.
+				I’ve drafted the agent. Its files and configuration stay private to you
+				until you deploy it.
 			</p>
 			<div className="overflow-hidden rounded-lg border bg-card">
 				<div className="border-b px-4 py-3 sm:px-5 sm:py-4">
@@ -733,7 +795,7 @@ function ReviewAgentCard({ conversation }: { conversation: Conversation }) {
 				</p>
 				<div className="flex min-h-14 flex-col items-stretch gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
 					<p className="text-pretty text-muted-foreground text-xs">
-						Creating this makes the agent available to everyone in Comp AI.
+						Deploying makes this agent available to the whole team.
 					</p>
 					<div className="flex flex-wrap justify-end gap-1 sm:shrink-0">
 						<Button
@@ -769,11 +831,11 @@ function ReviewAgentCard({ conversation }: { conversation: Conversation }) {
 												? "success"
 												: "idle"
 								}
-								pendingLabel="Creating"
-								successLabel="Created"
+								pendingLabel="Deploying"
+								successLabel="Deployed"
 								errorLabel="Try again"
 							>
-								Create agent
+								Deploy agent
 							</AsyncButtonContent>
 						</Button>
 					</div>
@@ -962,13 +1024,24 @@ function ChatLoading() {
 	);
 }
 
-function submissionText(message: unknown): string {
-	if (!message || typeof message !== "object" || !("text" in message)) {
-		return "Message unavailable";
-	}
-	return typeof message.text === "string"
-		? message.text
-		: "Message unavailable";
+const RESOURCE_ICONS = {
+	integration: Application,
+	company: Building,
+	contact: User,
+	deal: Partnership,
+} as const;
+
+function builderMessageOf(message: unknown) {
+	const row = recordOf(message);
+	return {
+		text: typeof row.text === "string" ? row.text : "Message unavailable",
+		resources: Array.isArray(row.resources)
+			? (row.resources as BuilderPrompt["resources"])
+			: [],
+		attachments: Array.isArray(row.attachments)
+			? (row.attachments as BuilderPrompt["attachments"])
+			: [],
+	};
 }
 
 function retryPromptOf(

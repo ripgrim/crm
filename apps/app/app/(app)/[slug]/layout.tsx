@@ -1,4 +1,5 @@
 import { notFound, unstable_rethrow } from "next/navigation";
+import { connection } from "next/server";
 import { Suspense } from "react";
 import { AppHeader, AppHeaderFallback } from "@/components/app-header";
 import { AppIconRail, AppIconRailFallback } from "@/components/app-icon-rail";
@@ -42,6 +43,7 @@ export default function AppLayout({
 async function WorkspaceHeader({
 	params,
 }: Pick<LayoutProps<"/[slug]">, "params">) {
+	await connection();
 	const [{ user }, { slug }] = await Promise.all([
 		requireGoogleAccess(),
 		params,

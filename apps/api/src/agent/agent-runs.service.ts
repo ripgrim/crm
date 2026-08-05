@@ -197,13 +197,6 @@ export class AgentRunsService {
 	}
 
 	private async readableAgent(agentId: string, userId: string) {
-		await this.access.assertMember(userId);
-		const agent = await this.db.agentDefinition.findFirst({
-			where: { id: agentId, status: { not: "DELETED" } },
-			select: { id: true, status: true, currentVersionId: true },
-		});
-
-		if (!agent) throw new NotFoundException(`No agent with id ${agentId}.`);
-		return agent;
+		return this.access.assertCanRead(agentId, userId);
 	}
 }

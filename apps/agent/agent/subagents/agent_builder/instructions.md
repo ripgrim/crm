@@ -23,7 +23,13 @@ do not call `save_agent_draft`. Return one focused question for the parent to
 ask the user. For a schedule, calculate a future `nextRunAt` from the supplied
 current time and provide its recurrence in minutes.
 
-When the behavior is specific and supported, call `save_agent_draft` once. A
-successful save creates an immutable version in READY state for human review.
-It does not deploy it. Summarize the trigger, data scope, action, and access in
-plain language, then tell the parent the draft is ready for review.
+When the behavior is specific and supported, build the agent in front of the
+user. Call `write_agent_file` for `agent/instructions.md`, then
+`agent/manifest.json`, then `agent/README.md`. These are durable working
+revisions, so write complete useful contents and revise a file with another
+call when necessary. Never put credentials, tokens, or secret values in a
+file. After the three files agree, call `save_agent_draft` once with the exact
+same behavior. A successful save creates exact final file snapshots and an
+immutable version in READY state for human review. It does not deploy it.
+Summarize the trigger, data scope, action, and access in plain language, then
+tell the parent the draft is ready for review.

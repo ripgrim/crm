@@ -81,6 +81,21 @@ export class ConversationSharingService {
 						lastMessageAt: true,
 						user: { select: { name: true } },
 						agent: { select: { id: true, name: true, status: true } },
+						builderArtifacts: {
+							orderBy: [{ createdAt: "desc" }, { revision: "desc" }],
+							take: 100,
+							select: {
+								id: true,
+								versionId: true,
+								path: true,
+								language: true,
+								content: true,
+								previousContent: true,
+								revision: true,
+								status: true,
+								createdAt: true,
+							},
+						},
 						submissions: {
 							orderBy: { createdAt: "asc" },
 							select: {
@@ -117,6 +132,10 @@ export class ConversationSharingService {
 			ownerName: conversation.user.name,
 			lastMessageAt: conversation.lastMessageAt.toISOString(),
 			agent: conversation.agent,
+			builderArtifacts: conversation.builderArtifacts.map((artifact) => ({
+				...artifact,
+				createdAt: artifact.createdAt.toISOString(),
+			})),
 			submissions: conversation.submissions.map((submission) => ({
 				...submission,
 				createdAt: submission.createdAt.toISOString(),

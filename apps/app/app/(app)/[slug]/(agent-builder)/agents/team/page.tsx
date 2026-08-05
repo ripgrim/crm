@@ -1,8 +1,9 @@
-import type { Metadata } from "next";
-import { TeamAgentsIndex } from "@/components/agent-builder/team-agents-index";
+import { redirect } from "next/navigation";
+import { workspaceUrl } from "@/lib/workspace-url";
 
-export const metadata: Metadata = { title: "Team agents" };
-
-export default function TeamAgentsListPage() {
-	return <TeamAgentsIndex />;
+export default async function TeamAgentsListPage({
+	params,
+}: PageProps<"/[slug]/agents/team">) {
+	const { slug } = await params;
+	redirect(workspaceUrl(slug, "/agents"));
 }

@@ -34,6 +34,8 @@ export const builderResource = z.object({
 	kind: z.enum(["integration", "company", "contact", "deal"]),
 	id: z.string().trim().min(1).max(160),
 	label: z.string().trim().min(1).max(120),
+	detail: z.string().trim().max(160).nullable().optional(),
+	imageUrl: z.url().nullable().optional(),
 });
 
 export const builderAttachment = z.object({

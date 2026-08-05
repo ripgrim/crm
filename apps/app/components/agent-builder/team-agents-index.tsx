@@ -3,15 +3,19 @@
 import ArrowRight from "@carbon/icons-react/es/ArrowRight";
 import Bot from "@carbon/icons-react/es/Bot";
 import { Icon } from "@crm/ui/components/icon";
+import { Skeleton } from "@crm/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useTRPC } from "@/lib/trpc/client";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 
 export function TeamAgentsIndex() {
 	const trpc = useTRPC();
 	const workspaceUrl = useWorkspaceUrl();
 	const agents = useQuery(trpc.agents.list.queryOptions());
+	const hydrated = useHydrated();
+	const rows = hydrated ? agents.data : undefined;
 
 	return (
 		<main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-10">
@@ -25,9 +29,11 @@ export function TeamAgentsIndex() {
 					</p>
 				</div>
 
-				{agents.data?.length ? (
+				{rows === undefined ? (
+					<AgentListFallback />
+				) : rows.length ? (
 					<div className="overflow-hidden rounded-lg border bg-card">
-						{agents.data.map((agent) => (
+						{rows.map((agent) => (
 							<Link
 								key={agent.id}
 								href={workspaceUrl(`/agents/${agent.id}`)}
@@ -72,14 +78,36 @@ export function TeamAgentsIndex() {
 							deploy.
 						</p>
 						<Link
-							href={workspaceUrl("/agents")}
+							href={workspaceUrl("/chat")}
 							className="mt-4 text-primary text-xs hover:underline"
 						>
-							Open the agent builder
+							Open chat
 						</Link>
 					</div>
 				)}
 			</div>
 		</main>
+	);
+}
+
+function AgentListFallback() {
+	return (
+		<div
+			className="overflow-hidden rounded-lg border bg-card"
+			aria-hidden="true"
+		>
+			{[0, 1].map((row) => (
+				<div
+					key={row}
+					className="flex min-h-16 items-center gap-4 border-t px-5 py-3 first:border-t-0"
+				>
+					<Skeleton className="size-8 shrink-0 rounded-md" />
+					<span className="min-w-0 flex-1 space-y-2">
+						<Skeleton className="h-3 w-32" />
+						<Skeleton className="h-2.5 w-full max-w-96" />
+					</span>
+				</div>
+			))}
+		</div>
 	);
 }

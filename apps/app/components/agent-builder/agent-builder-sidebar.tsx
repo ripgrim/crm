@@ -13,6 +13,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/types";
+import { useHydrated } from "@/lib/use-hydrated";
 import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 
 type Conversation = RouterOutputs["conversations"]["builderList"][number];
@@ -29,6 +30,7 @@ export function AgentBuilderSidebar({
 	const workspaceUrl = useWorkspaceUrl();
 	const trpc = useTRPC();
 	const queryClient = useQueryClient();
+	const hydrated = useHydrated();
 	const conversations = useQuery({
 		...trpc.conversations.builderList.queryOptions(),
 		refetchInterval: 5000,
@@ -46,8 +48,8 @@ export function AgentBuilderSidebar({
 		}),
 	);
 
-	const groups = groupConversations(conversations.data ?? []);
-	const teamAgents = agents.data ?? [];
+	const groups = groupConversations(hydrated ? (conversations.data ?? []) : []);
+	const teamAgents = hydrated ? (agents.data ?? []) : [];
 
 	return (
 		<aside className={cn("min-h-0 min-w-0 flex-col p-4 font-sans", className)}>
@@ -55,7 +57,7 @@ export function AgentBuilderSidebar({
 				<span className="font-medium text-xs">Chats</span>
 				<Button asChild variant="ghost" size="icon-xs">
 					<Link
-						href={workspaceUrl("/agents")}
+						href={workspaceUrl("/chat")}
 						aria-label="New agent chat"
 						onClick={onNavigate}
 					>
@@ -102,7 +104,7 @@ export function AgentBuilderSidebar({
 					</div>
 				))}
 
-				{conversations.isSuccess && groups.length === 0 ? (
+				{groups.length === 0 ? (
 					<p className="px-2 py-3 text-muted-foreground text-xs">
 						No chats in the last 7 days.
 					</p>
@@ -132,7 +134,7 @@ function TeamAgents({
 	return (
 		<div className="mt-3 border-t pt-1">
 			<Link
-				href={workspaceUrl("/agents/team")}
+				href={workspaceUrl("/agents")}
 				onClick={onNavigate}
 				className="flex h-8 items-end gap-2 rounded-sm px-2 pb-1 font-medium text-[11px] text-muted-foreground uppercase tracking-[0.08em] outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
 			>

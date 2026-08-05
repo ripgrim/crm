@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import { InjectDatabase } from "../database/database.constants";
 import { AgentAccessService } from "./agent-access.service";
+import { TEAM_AGENT_STATUSES } from "./agent-visibility";
 import type { AgentDeployInput, AgentUpdateInput } from "./agents.contracts";
 
 @Injectable()
@@ -19,7 +20,7 @@ export class AgentDefinitionsService {
 		await this.access.assertMember(userId);
 
 		const rows = await this.db.agentDefinition.findMany({
-			where: { status: { not: "DELETED" } },
+			where: { status: { in: [...TEAM_AGENT_STATUSES] } },
 			orderBy: { updatedAt: "desc" },
 			select: {
 				id: true,
@@ -61,7 +62,7 @@ export class AgentDefinitionsService {
 	}
 
 	async byId(id: string, userId: string) {
-		await this.access.assertMember(userId);
+		await this.access.assertCanRead(id, userId);
 
 		const row = await this.db.agentDefinition.findFirst({
 			where: { id, status: { not: "DELETED" } },

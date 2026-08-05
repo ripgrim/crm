@@ -34,6 +34,64 @@ export type DraftAgentInput = {
 	access: string[];
 };
 
+export const BUILDER_ARTIFACT_PATHS = [
+	"agent/README.md",
+	"agent/instructions.md",
+	"agent/manifest.json",
+] as const;
+
+export type BuilderArtifactPath = (typeof BUILDER_ARTIFACT_PATHS)[number];
+
+const ARTIFACT_LANGUAGES: Record<BuilderArtifactPath, string> = {
+	"agent/README.md": "markdown",
+	"agent/instructions.md": "markdown",
+	"agent/manifest.json": "json",
+};
+
+export async function writeBuilderArtifact(
+	conversationId: string,
+	userId: string,
+	path: BuilderArtifactPath,
+	content: string,
+) {
+	assertSafeArtifact(content);
+
+	return db.$transaction(async (tx) => {
+		const conversation = await tx.agentConversation.findFirst({
+			where: { id: conversationId, userId, kind: "BUILDER" },
+			select: { id: true },
+		});
+		if (!conversation) {
+			throw new Error("This builder conversation is unavailable.");
+		}
+
+		const latest = await tx.agentBuilderArtifact.findFirst({
+			where: { conversationId, path },
+			orderBy: { revision: "desc" },
+			select: { id: true, revision: true, content: true, status: true },
+		});
+
+		if (latest?.content === content && latest.status === "WRITING") {
+			return { saved: true as const, id: latest.id, revision: latest.revision };
+		}
+
+		const artifact = await tx.agentBuilderArtifact.create({
+			data: {
+				conversationId,
+				path,
+				language: ARTIFACT_LANGUAGES[path],
+				content,
+				previousContent: latest?.content ?? null,
+				revision: (latest?.revision ?? 0) + 1,
+				status: "WRITING",
+			},
+			select: { id: true, revision: true },
+		});
+
+		return { saved: true as const, ...artifact };
+	});
+}
+
 export async function builderContext(conversationId: string, userId: string) {
 	const conversation = await db.agentConversation.findFirst({
 		where: { id: conversationId, userId, kind: "BUILDER" },
@@ -138,6 +196,8 @@ export async function saveBuilderDraft(
 		networkPolicy: "deny-all",
 		credentials: "app-runtime-only",
 	};
+	const files = artifactFiles(input, manifest);
+	for (const file of files) assertSafeArtifact(file.content);
 
 	return db.$transaction(async (tx) => {
 		let agentId = conversation.agentId;
@@ -191,6 +251,26 @@ export async function saveBuilderDraft(
 			},
 			select: { id: true, number: true, status: true },
 		});
+
+		for (const file of files) {
+			const latestArtifact = await tx.agentBuilderArtifact.findFirst({
+				where: { conversationId, path: file.path },
+				orderBy: { revision: "desc" },
+				select: { revision: true, content: true },
+			});
+			await tx.agentBuilderArtifact.create({
+				data: {
+					conversationId,
+					versionId: version.id,
+					path: file.path,
+					language: file.language,
+					content: file.content,
+					previousContent: latestArtifact?.content ?? null,
+					revision: (latestArtifact?.revision ?? 0) + 1,
+					status: "READY",
+				},
+			});
+		}
 
 		await tx.agentTrigger.create({
 			data: {
@@ -402,6 +482,38 @@ function scheduleDate(trigger: DraftTrigger, now: Date): Date | null {
 	if (trigger.type !== "SCHEDULE") return null;
 	const parsed = new Date(trigger.nextRunAt ?? "");
 	return parsed > now ? parsed : null;
+}
+
+function artifactFiles(input: DraftAgentInput, manifest: object) {
+	return [
+		{
+			path: "agent/README.md" as const,
+			language: ARTIFACT_LANGUAGES["agent/README.md"],
+			content: `# ${input.name}\n\n${input.description}\n\n## Trigger\n\n${input.trigger.summary}\n\n## Access\n\n${input.access.map((item) => `- ${item}`).join("\n") || "- CRM data in the approved scope"}\n`,
+		},
+		{
+			path: "agent/instructions.md" as const,
+			language: ARTIFACT_LANGUAGES["agent/instructions.md"],
+			content: `${input.instructions.trim()}\n`,
+		},
+		{
+			path: "agent/manifest.json" as const,
+			language: ARTIFACT_LANGUAGES["agent/manifest.json"],
+			content: `${JSON.stringify(manifest, null, 2)}\n`,
+		},
+	];
+}
+
+function assertSafeArtifact(content: string): void {
+	const secretPatterns = [
+		/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i,
+		/\b(?:api[_-]?key|password|secret|access[_-]?token)\b\s*[:=]\s*["']?[a-z0-9_./+=-]{12,}/i,
+		/\b(?:sk|pk)_(?:live|test)_[a-z0-9]{16,}/i,
+	];
+
+	if (secretPatterns.some((pattern) => pattern.test(content))) {
+		throw new Error("Agent files cannot contain credentials or secret values.");
+	}
 }
 
 function scopeSummary(resources: BuilderResource[]): string {

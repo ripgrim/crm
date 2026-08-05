@@ -6,8 +6,6 @@ import ArrowUp from "@carbon/icons-react/es/ArrowUp";
 import AttachmentIcon from "@carbon/icons-react/es/Attachment";
 import Building from "@carbon/icons-react/es/Building";
 import Calendar from "@carbon/icons-react/es/Calendar";
-import Close from "@carbon/icons-react/es/Close";
-import Document from "@carbon/icons-react/es/Document";
 import Email from "@carbon/icons-react/es/Email";
 import Partnership from "@carbon/icons-react/es/Partnership";
 import Search from "@carbon/icons-react/es/Search";
@@ -30,19 +28,21 @@ import { toast } from "sonner";
 import {
 	type BuilderCommandType,
 	builderCommandType,
+	consumeBuilderCommand,
 } from "@/lib/agent-builder";
 import { useTRPC } from "@/lib/trpc/client";
+import {
+	ChatAttachmentChip,
+	type ChatChipAttachment,
+	type ChatChipResource,
+	ChatCommandChip,
+	ChatReferenceChip,
+	ChatReferenceIdentity,
+} from "./chat-chips";
 
-export type BuilderResource = {
-	kind: "integration" | "company" | "contact" | "deal";
-	id: string;
-	label: string;
-};
+export type BuilderResource = ChatChipResource;
 
-export type BuilderAttachment = {
-	name: string;
-	type: string;
-	size: number;
+export type BuilderAttachment = ChatChipAttachment & {
 	contentBase64: string;
 };
 
@@ -51,6 +51,13 @@ export type BuilderPrompt = {
 	message: string;
 	resources: BuilderResource[];
 	attachments: BuilderAttachment[];
+};
+
+const CREATE_AGENT_COMMAND = {
+	commandType: "CREATE_AGENT" as const,
+	invocation: "/Create agent",
+	label: "Create agent",
+	description: "Build a durable team automation",
 };
 
 export function AgentComposer({
@@ -68,7 +75,12 @@ export function AgentComposer({
 }) {
 	const trpc = useTRPC();
 	const fileInput = useRef<HTMLInputElement>(null);
-	const [draft, setDraft] = useState(initialPrompt);
+	const initialCommand = consumeBuilderCommand(initialPrompt);
+	const [draft, setDraft] = useState(initialCommand?.body ?? initialPrompt);
+	const [command, setCommand] = useState<typeof CREATE_AGENT_COMMAND | null>(
+		initialCommand ? CREATE_AGENT_COMMAND : null,
+	);
+	const [commandOpen, setCommandOpen] = useState(false);
 	const [resourceQuery, setResourceQuery] = useState("");
 	const [resources, setResources] = useState<BuilderResource[]>([]);
 	const [attachments, setAttachments] = useState<BuilderAttachment[]>([]);
@@ -80,14 +92,17 @@ export function AgentComposer({
 
 	const submit = () => {
 		if (!canSend) return;
-		const message = draft.trim();
+		const body = draft.trim();
+		const message = command ? `${command.invocation} ${body}` : body;
 		onSubmit({
-			commandType: builderCommandType(message),
+			commandType: command?.commandType ?? builderCommandType(message),
 			message,
 			resources,
 			attachments,
 		});
 		setDraft("");
+		setCommand(null);
+		setCommandOpen(false);
 		setResources([]);
 		setAttachments([]);
 	};
@@ -105,6 +120,18 @@ export function AgentComposer({
 	const connectedGoogle = (google.data?.sources ?? []).filter(
 		(source) => source.connected,
 	);
+	const updateDraft = (value: string) => {
+		const parsed = consumeBuilderCommand(value);
+		if (parsed) {
+			setCommand(CREATE_AGENT_COMMAND);
+			setDraft(parsed.body);
+			setCommandOpen(false);
+			return;
+		}
+
+		setDraft(value);
+		setCommandOpen(!command && value.trimStart().startsWith("/"));
+	};
 
 	return (
 		<div
@@ -113,12 +140,19 @@ export function AgentComposer({
 				mode === "home" ? "min-h-24" : "min-h-[78px]",
 			)}
 		>
-			{resources.length > 0 || attachments.length > 0 ? (
+			{command || resources.length > 0 || attachments.length > 0 ? (
 				<div className="flex flex-wrap gap-1 px-1 pb-1">
+					{command ? (
+						<ChatCommandChip
+							label={command.label}
+							icon={Application}
+							onRemove={() => setCommand(null)}
+						/>
+					) : null}
 					{resources.map((resource) => (
-						<ComposerChip
+						<ChatReferenceChip
 							key={`${resource.kind}:${resource.id}`}
-							label={resource.label}
+							resource={resource}
 							icon={RESOURCE_ICONS[resource.kind]}
 							onRemove={() =>
 								setResources((current) =>
@@ -131,10 +165,9 @@ export function AgentComposer({
 						/>
 					))}
 					{attachments.map((attachment) => (
-						<ComposerChip
+						<ChatAttachmentChip
 							key={`${attachment.name}:${attachment.size}`}
-							label={attachment.name}
-							icon={Document}
+							attachment={attachment}
 							onRemove={() =>
 								setAttachments((current) =>
 									current.filter((item) => item !== attachment),
@@ -147,7 +180,7 @@ export function AgentComposer({
 
 			<textarea
 				value={draft}
-				onChange={(event) => setDraft(event.target.value)}
+				onChange={(event) => updateDraft(event.target.value)}
 				onKeyDown={(event) => {
 					if (event.key === "Enter" && !event.shiftKey) {
 						event.preventDefault();
@@ -214,6 +247,8 @@ export function AgentComposer({
 													source.source === "calendar"
 														? "Google Calendar"
 														: "Gmail",
+												detail: "Connected integration",
+												imageUrl: null,
 											})
 										}
 									/>
@@ -229,6 +264,7 @@ export function AgentComposer({
 											icon={RESOURCE_ICONS[resource.kind]}
 											label={resource.label}
 											detail={resource.detail ?? RESOURCE_LABELS[resource.kind]}
+											imageUrl={resource.imageUrl}
 											onSelect={() => addResource(resource)}
 										/>
 									))}
@@ -263,7 +299,7 @@ export function AgentComposer({
 						<Icon icon={AttachmentIcon} />
 					</Button>
 
-					<Popover>
+					<Popover open={commandOpen} onOpenChange={setCommandOpen}>
 						<PopoverTrigger asChild>
 							<Button
 								variant="ghost"
@@ -282,13 +318,13 @@ export function AgentComposer({
 						>
 							<button
 								type="button"
-								onClick={() =>
+								onClick={() => {
+									setCommand(CREATE_AGENT_COMMAND);
 									setDraft((current) =>
-										current.startsWith("/Create agent")
-											? current
-											: `/Create agent ${current}`,
-									)
-								}
+										current.trimStart().startsWith("/") ? "" : current,
+									);
+									setCommandOpen(false);
+								}}
 								className="flex w-full items-center gap-3 rounded-sm px-3 py-2 text-left outline-none hover:bg-muted focus-visible:bg-muted"
 							>
 								<Icon
@@ -297,10 +333,10 @@ export function AgentComposer({
 								/>
 								<span>
 									<span className="block font-medium text-xs">
-										/Create agent
+										/{CREATE_AGENT_COMMAND.label}
 									</span>
 									<span className="block text-muted-foreground text-xs">
-										Build a durable team automation
+										{CREATE_AGENT_COMMAND.description}
 									</span>
 								</span>
 							</button>
@@ -361,40 +397,17 @@ const RESOURCE_LABELS: Record<BuilderResource["kind"], string> = {
 	deal: "Deal",
 };
 
-function ComposerChip({
-	label,
-	icon,
-	onRemove,
-}: {
-	label: string;
-	icon: CarbonIcon;
-	onRemove: () => void;
-}) {
-	return (
-		<span className="flex h-6 max-w-full items-center gap-1 rounded-full bg-foreground px-2 text-background text-xs sm:max-w-56">
-			<Icon icon={icon} className="size-3.5 shrink-0" />
-			<span className="truncate font-medium">{label}</span>
-			<button
-				type="button"
-				aria-label={`Remove ${label}`}
-				onClick={onRemove}
-				className="-mr-1 flex size-4 items-center justify-center rounded-full outline-none hover:bg-background/15 focus-visible:ring-2 focus-visible:ring-background/60"
-			>
-				<Icon icon={Close} className="size-3" />
-			</button>
-		</span>
-	);
-}
-
 function ResourceButton({
 	icon,
 	label,
 	detail,
+	imageUrl,
 	onSelect,
 }: {
 	icon: CarbonIcon;
 	label: string;
 	detail: string | null;
+	imageUrl?: string | null;
 	onSelect: () => void;
 }) {
 	return (
@@ -403,15 +416,16 @@ function ResourceButton({
 			onClick={onSelect}
 			className="flex w-full items-center gap-3 rounded-sm px-3 py-2 text-left outline-none hover:bg-muted focus-visible:bg-muted"
 		>
-			<span className="flex size-6 shrink-0 items-center justify-center text-muted-foreground">
-				<Icon icon={icon} className="size-4" />
-			</span>
-			<span className="min-w-0 flex-1">
-				<span className="block truncate font-medium text-xs">{label}</span>
-				<span className="block truncate text-muted-foreground text-xs">
-					{detail}
-				</span>
-			</span>
+			<ChatReferenceIdentity
+				resource={{
+					kind: "integration",
+					id: label,
+					label,
+					detail,
+					imageUrl,
+				}}
+				icon={icon}
+			/>
 		</button>
 	);
 }

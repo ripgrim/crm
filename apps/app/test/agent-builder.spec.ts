@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
 	builderCommandType,
+	consumeBuilderCommand,
 	hasCreateAgentCommand,
 } from "../lib/agent-builder";
 
@@ -14,6 +15,13 @@ describe("agent builder commands", () => {
 		);
 		expect(builderCommandType("Tell me about this customer")).toBe("CHAT");
 		expect(builderCommandType("/Create agentic workflows")).toBe("CHAT");
+		expect(builderCommandType("/create-agent Flag stalled deals")).toBe(
+			"CREATE_AGENT",
+		);
+		expect(consumeBuilderCommand("/Create agent Flag stalled deals")).toEqual({
+			commandType: "CREATE_AGENT",
+			body: "Flag stalled deals",
+		});
 	});
 
 	it("shows creation surfaces only after a creation command", () => {

@@ -49,11 +49,11 @@ const ITEMS: RailItem[] = [
 	},
 	{ title: "Deals", href: "/deals", icon: Partnership, match: "prefix" },
 	{
-		title: "Agents",
-		href: "/agents",
+		title: "Chat",
+		href: "/chat",
 		icon: Bot,
 		match: "prefix",
-		related: ["/agent", "/chat"],
+		related: ["/agent", "/agents"],
 	},
 	{ title: "Settings", href: "/settings", icon: Settings, match: "prefix" },
 ];
@@ -135,7 +135,7 @@ function MobileRailLink({
 				aria-current={active ? "page" : undefined}
 				onClick={onNavigate}
 				transitionTypes={[
-					item.title === "Agents" ? "nav-forward" : "nav-lateral",
+					item.title === "Chat" ? "nav-forward" : "nav-lateral",
 				]}
 			>
 				<Icon icon={item.icon} />
@@ -221,8 +221,8 @@ export function AppIconRail() {
 			})),
 		[workspaceUrl],
 	);
-	const inAgents = items.some(
-		(item) => item.title === "Agents" && isActive(item, pathname),
+	const inChat = items.some(
+		(item) => item.title === "Chat" && isActive(item, pathname),
 	);
 
 	return (
@@ -242,7 +242,7 @@ export function AppIconRail() {
 			</nav>
 
 			<Sheet open={open} onOpenChange={setOpen}>
-				{inAgents ? (
+				{inChat ? (
 					<SheetContent
 						side="left"
 						showCloseButton={false}

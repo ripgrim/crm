@@ -165,6 +165,11 @@ enum AgentVersionStatus {
   REJECTED
 }
 
+enum AgentBuilderArtifactStatus {
+  WRITING
+  READY
+}
+
 enum AgentTriggerType {
   MANUAL
   SCHEDULE
@@ -461,6 +466,7 @@ model AgentConversation {
   submissions     AgentConversationSubmission[]
   feedback        AgentConversationFeedback[]
   createdVersions AgentVersion[]                @relation("AgentVersionSourceConversation")
+  builderArtifacts AgentBuilderArtifact[]
 
   @@index([contactId, lastMessageAt])
   @@index([companyId, lastMessageAt])
@@ -597,11 +603,35 @@ model AgentVersion {
   triggers    AgentTrigger[]
   runs        AgentRun[]
   auditEvents AgentAuditEvent[]
+  builderArtifacts AgentBuilderArtifact[]
 
   @@unique([agentId, number])
   @@index([agentId, createdAt])
   @@index([status, createdAt])
   @@map("agentVersion")
+}
+
+model AgentBuilderArtifact {
+  id String @id @default(cuid())
+
+  conversationId String?
+  conversation   AgentConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  versionId String?
+  version   AgentVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+
+  path            String
+  language        String
+  content         String
+  previousContent String?
+  revision        Int
+  status          AgentBuilderArtifactStatus @default(WRITING)
+  createdAt       DateTime                   @default(now())
+
+  @@unique([conversationId, path, revision])
+  @@index([conversationId, createdAt])
+  @@index([versionId, path])
+  @@map("agentBuilderArtifact")
 }
 
 model AgentTrigger {
