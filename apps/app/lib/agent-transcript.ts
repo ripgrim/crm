@@ -1,4 +1,9 @@
-import type { EveMessage, EveMessagePart } from "eve/react";
+import type { MessageStreamEvent } from "eve/client";
+import {
+	defaultMessageReducer,
+	type EveMessage,
+	type EveMessagePart,
+} from "eve/react";
 
 export type TranscriptItem =
 	| { kind: "said"; id: string; mine: boolean; text: string }
@@ -75,6 +80,17 @@ export type TranscriptMessage = {
 	mine: boolean;
 	items: TranscriptItem[];
 };
+
+export function messagesFromEvents(
+	events: readonly MessageStreamEvent[],
+): readonly EveMessage[] {
+	const reducer = defaultMessageReducer();
+	let data = reducer.initial();
+
+	for (const event of events) data = reducer.reduce(data, event);
+
+	return data.messages;
+}
 
 export function toTranscript(
 	messages: readonly EveMessage[],

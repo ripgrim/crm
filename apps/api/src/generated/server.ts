@@ -17,7 +17,7 @@ import { timelineInput, timelineCountsInput, myTasksInput, activityCreateInput, 
 import { agentIdInput, agentHistoryInput, agentUpdateInput, agentDeployInput, agentRunNowInput } from "../agent/agents.contracts";
 import { companyListInput, companyIdInput, companyOptionsInput, companyCreateInput, companyUpdateArgs, setPrimaryContactInput } from "../companies/companies.contracts";
 import { contactListInput, contactIdInput, contactCreateInput, contactUpdateArgs, factDecisionInput } from "../contacts/contacts.contracts";
-import { conversationListInput, builderResourceSearchInput, conversationIdInput, conversationEventsInput, conversationSaveInput, builderConversationCreateInput, builderConversationSubmitInput, builderResponseRatingInput, sharedConversationInput } from "../conversations/conversations.contracts";
+import { conversationListInput, builderResourceSearchInput, conversationIdInput, conversationEventsInput, conversationSaveInput, builderConversationCreateInput, builderConversationSubmitInput, builderQuestionResponseInput, builderResponseRatingInput, sharedConversationInput } from "../conversations/conversations.contracts";
 import { dashboardSummaryInput } from "../dashboard/dashboard.contracts";
 import { dealListInput, dealIdInput, dealCreateInput, dealUpdateArgs, setStageInput } from "../deals/deals.contracts";
 import { setAutoCreateInput, suppressDomainInput, threadInput, calendarEventInput } from "../google/google.contracts";
@@ -169,6 +169,9 @@ const appRouter = t.router({
     submitBuilder: publicProcedure
       .input(builderConversationSubmitInput)
       .mutation(async () => "PLACEHOLDER_DO_NOT_REMOVE" as unknown as Awaited<ReturnType<ConversationsRouter["submitBuilder"]>>),
+    answerBuilderQuestion: publicProcedure
+      .input(builderQuestionResponseInput)
+      .mutation(async () => "PLACEHOLDER_DO_NOT_REMOVE" as unknown as Awaited<ReturnType<ConversationsRouter["answerBuilderQuestion"]>>),
     rateBuilderResponse: publicProcedure
       .input(builderResponseRatingInput)
       .mutation(async () => "PLACEHOLDER_DO_NOT_REMOVE" as unknown as Awaited<ReturnType<ConversationsRouter["rateBuilderResponse"]>>),

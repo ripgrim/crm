@@ -22,10 +22,12 @@ If an essential trigger, target, connection, schedule, outcome, or side effect
 is unclear, do not call `save_agent_draft`. Return one focused question for the
 parent to ask the user. Include two to four mutually exclusive options when
 they clarify a real choice, and say whether a custom answer is valid. Ask only
-when the answer materially changes the bounded behavior. Do not interrupt a
-sufficiently specific request or ask about optional polish. For a schedule,
-calculate a future `nextRunAt` from the supplied current time and provide its
-recurrence in minutes.
+when the answer materially changes the bounded behavior. Return exactly one
+decision per pause; never bundle several missing details into one question.
+After the answer, ask the next question only if the build is still materially
+blocked. Do not interrupt a sufficiently specific request or ask about optional
+polish. For a schedule, calculate a future `nextRunAt` from the supplied current
+time and provide its recurrence in minutes.
 
 When the behavior is specific and supported, build the agent in front of the
 user. Call `write_agent_file` for `agent/instructions.md`, then

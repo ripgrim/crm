@@ -25,6 +25,9 @@ let service: ConversationsService;
 let cache: ReturnType<typeof memoryCache>;
 
 beforeAll(async () => {
+	await db.agentEvent.deleteMany({
+		where: { sessionId: { startsWith: `builder-question-${suffix}` } },
+	});
 	await db.agentConversation.deleteMany({ where: { userId } });
 	await db.user.deleteMany({ where: { id: userId } });
 	await db.contact.deleteMany({ where: { email } });
@@ -46,6 +49,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+	await db.agentEvent.deleteMany({
+		where: { sessionId: { startsWith: `builder-question-${suffix}` } },
+	});
 	await db.contact.deleteMany({ where: { email } });
 	await db.agentConversation.deleteMany({ where: { userId } });
 	await db.user.deleteMany({ where: { id: userId } });
@@ -190,5 +196,71 @@ describe("ConversationsService", () => {
 		expect(
 			(await service.builderById(creation.id, userId)).submissions[0],
 		).toMatchObject({ commandType: "CREATE_AGENT" });
+	});
+
+	it("queues a pending builder answer for the CRM-owned Eve channel", async () => {
+		const conversation = await service.createBuilder(
+			{
+				clientRequestId: crypto.randomUUID(),
+				commandType: "CREATE_AGENT",
+				message: "/Create agent Flag overdue invoices",
+				resources: [],
+				attachments: [],
+			},
+			userId,
+		);
+		const sessionId = `builder-question-${suffix}-1`;
+		await db.agentConversation.update({
+			where: { id: conversation.id },
+			data: {
+				sessionId,
+				continuationToken: `crm:builder:${conversation.id}`,
+			},
+		});
+		await db.agentEvent.create({
+			data: {
+				id: `evt_${suffix}_question`,
+				sessionId,
+				type: "input.requested",
+				data: {
+					requests: [
+						{
+							kind: "question",
+							requestId: "question-1",
+							prompt: "Where should this go?",
+							display: "select",
+							options: [{ id: "crm-task", label: "Create a CRM task" }],
+						},
+					],
+				},
+				emittedAt: new Date(),
+			},
+		});
+
+		const response = await service.answerBuilderQuestion(
+			{
+				id: conversation.id,
+				clientRequestId: crypto.randomUUID(),
+				requestId: "question-1",
+				optionId: "crm-task",
+			},
+			userId,
+		);
+		const submission = await db.agentConversationSubmission.findUnique({
+			where: { id: response.id },
+			select: { commandType: true, message: true, status: true },
+		});
+
+		expect(submission).toMatchObject({
+			commandType: "CHAT",
+			status: "PENDING",
+			message: {
+				text: "Create a CRM task",
+				inputResponse: {
+					requestId: "question-1",
+					answer: "crm-task",
+				},
+			},
+		});
 	});
 });

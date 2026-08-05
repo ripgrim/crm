@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { builderTaskMarkdown } from "../agent/instructions/task";
 import {
+	builderDeliveryMessage,
 	builderIdFromToken,
 	builderToken,
 	runIdFromToken,
@@ -35,6 +36,20 @@ describe("custom agent continuation tokens", () => {
 	});
 });
 
+describe("builder delivery messages", () => {
+	it("delivers a question response without submission wrapper text", () => {
+		expect(
+			builderDeliveryMessage("submission-1", {
+				text: "Use a CRM task instead",
+				inputResponse: {
+					requestId: "question-1",
+					answer: "crm-task",
+				},
+			}),
+		).toBe("crm-task");
+	});
+});
+
 describe("session purpose boundaries", () => {
 	it("reads current-turn attributes before initiator attributes", () => {
 		expect(attribute(context("builder"), "conversationId")).toBe("chat-1");
@@ -57,6 +72,7 @@ describe("builder command routing", () => {
 		const creation = builderTaskMarkdown("CREATE_AGENT");
 		expect(creation).toContain("Call agent_builder exactly once");
 		expect(creation).toContain("call ask_question");
+		expect(creation).toContain("exactly one decision at a time");
 		expect(creation).toContain(
 			"Do not interrupt a sufficiently specific request",
 		);

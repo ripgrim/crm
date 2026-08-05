@@ -66,6 +66,22 @@ export type BuilderConversationSubmitInput = z.infer<
 	typeof builderConversationSubmitInput
 >;
 
+export const builderQuestionResponseInput = z
+	.object({
+		id: z.string().min(1),
+		clientRequestId: z.uuid(),
+		requestId: z.string().trim().min(1).max(240),
+		optionId: z.string().trim().min(1).max(160).optional(),
+		text: z.string().trim().min(1).max(20_000).optional(),
+	})
+	.refine((input) => Boolean(input.optionId) !== Boolean(input.text), {
+		message: "Choose one option or enter a written answer.",
+	});
+
+export type BuilderQuestionResponseInput = z.infer<
+	typeof builderQuestionResponseInput
+>;
+
 export const sharedConversationInput = z.object({
 	token: z.string().trim().min(32).max(256),
 });

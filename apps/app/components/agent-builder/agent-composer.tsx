@@ -21,6 +21,7 @@ import {
 } from "@crm/ui/components/popover";
 import { Skeleton } from "@crm/ui/components/skeleton";
 import { SkeletonSwap } from "@crm/ui/components/skeleton-swap";
+import { Textarea } from "@crm/ui/components/textarea";
 import { cn } from "@crm/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
@@ -31,6 +32,7 @@ import {
 	consumeBuilderCommand,
 } from "@/lib/agent-builder";
 import { useTRPC } from "@/lib/trpc/client";
+import { AGENT_COMPOSER_CLASS_NAME } from "../agent-composer-frame";
 import {
 	ChatAttachmentChip,
 	type ChatChipAttachment,
@@ -136,7 +138,7 @@ export function AgentComposer({
 	return (
 		<div
 			className={cn(
-				"flex w-full flex-col justify-between rounded-lg border bg-muted p-[11px] shadow-[inset_0_1px_1px_rgb(0_0_0/0.12)] transition-colors focus-within:border-muted-foreground/60 focus-within:ring-1 focus-within:ring-ring/40",
+				AGENT_COMPOSER_CLASS_NAME,
 				mode === "home" ? "min-h-24" : "min-h-[78px]",
 			)}
 		>
@@ -178,7 +180,7 @@ export function AgentComposer({
 				</div>
 			) : null}
 
-			<textarea
+			<Textarea
 				value={draft}
 				onChange={(event) => updateDraft(event.target.value)}
 				onKeyDown={(event) => {
@@ -189,13 +191,14 @@ export function AgentComposer({
 				}}
 				disabled={disabled}
 				rows={mode === "home" ? 2 : 1}
+				variant="composer"
+				size="composer"
 				placeholder={
 					mode === "home"
 						? "Ask about your CRM or automate a task…"
 						: "Send a message"
 				}
 				aria-label="Message the agent builder"
-				className="max-h-40 min-h-6 w-full resize-none bg-transparent px-1 text-base leading-6 outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60 sm:text-[15px]"
 			/>
 
 			<div className="flex h-7 items-center justify-between">

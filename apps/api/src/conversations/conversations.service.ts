@@ -15,6 +15,7 @@ import { InjectDatabase } from "../database/database.constants";
 import type {
 	BuilderConversationCreateInput,
 	BuilderConversationSubmitInput,
+	BuilderQuestionResponseInput,
 	ConversationEventsInput,
 	ConversationListInput,
 	ConversationSaveInput,
@@ -496,6 +497,136 @@ export class ConversationsService {
 		return submission;
 	}
 
+	async answerBuilderQuestion(
+		input: BuilderQuestionResponseInput,
+		userId: string,
+	): Promise<{ id: string }> {
+		const existing = await this.db.agentConversationSubmission.findUnique({
+			where: { clientRequestId: input.clientRequestId },
+			select: { id: true, conversationId: true, submittedById: true },
+		});
+
+		if (existing) {
+			if (
+				existing.conversationId !== input.id ||
+				existing.submittedById !== userId
+			) {
+				throw new BadRequestException("That request has already been used.");
+			}
+
+			return { id: existing.id };
+		}
+
+		const conversation = await this.db.agentConversation.findFirst({
+			where: { id: input.id, userId, kind: "BUILDER" },
+			select: { id: true, sessionId: true, continuationToken: true },
+		});
+
+		if (!conversation) {
+			throw new NotFoundException(
+				`No builder conversation with id ${input.id}.`,
+			);
+		}
+
+		if (!conversation.sessionId || !conversation.continuationToken) {
+			throw new BadRequestException(
+				"The agent is no longer waiting for that answer.",
+			);
+		}
+
+		const boundary = await this.db.agentEvent.findFirst({
+			where: {
+				sessionId: conversation.sessionId,
+				type: {
+					in: [
+						"input.requested",
+						"message.received",
+						"turn.cancelled",
+						"session.completed",
+						"session.failed",
+					],
+				},
+			},
+			orderBy: [{ emittedAt: "desc" }, { id: "desc" }],
+			select: { type: true, data: true },
+		});
+
+		if (boundary?.type !== "input.requested") {
+			throw new BadRequestException(
+				"The agent is no longer waiting for that answer.",
+			);
+		}
+
+		const requests = arrayOf(recordOf(boundary.data).requests).map(recordOf);
+		const question = requests.find(
+			(request) =>
+				request.kind === "question" && request.requestId === input.requestId,
+		);
+
+		if (!question) {
+			throw new BadRequestException(
+				"That follow-up question is no longer active.",
+			);
+		}
+
+		const options = arrayOf(question.options).map(recordOf);
+		const selected = input.optionId
+			? options.find((option) => option.id === input.optionId)
+			: null;
+
+		if (input.optionId && !selected) {
+			throw new BadRequestException(
+				"That answer is not available for this question.",
+			);
+		}
+
+		const acceptsText =
+			question.allowFreeform === true ||
+			question.display === "text" ||
+			options.length === 0;
+		if (input.text && !acceptsText) {
+			throw new BadRequestException(
+				"Choose one of the available answers for this question.",
+			);
+		}
+
+		const answer = input.optionId ?? input.text;
+		if (!answer) {
+			throw new BadRequestException("Choose an answer before submitting.");
+		}
+
+		const displayText =
+			typeof selected?.label === "string" ? selected.label : answer;
+		const submission = await this.db.$transaction(async (tx) => {
+			const created = await tx.agentConversationSubmission.create({
+				data: {
+					conversationId: input.id,
+					submittedById: userId,
+					clientRequestId: input.clientRequestId,
+					commandType: "CHAT",
+					message: {
+						text: displayText,
+						resources: [],
+						attachments: [],
+						inputResponse: { requestId: input.requestId, answer },
+					},
+				},
+				select: { id: true },
+			});
+
+			await tx.agentConversation.update({
+				where: { id: input.id },
+				data: { lastMessageAt: new Date(), lastReadAt: new Date() },
+			});
+
+			return created;
+		});
+
+		this.agent?.builderConversationQueued();
+
+		return submission;
+	}
+
 	async markRead(id: string, userId: string): Promise<{ id: string }> {
 		const updated = await this.db.agentConversation.updateMany({
 			where: { id, userId, kind: "BUILDER" },
@@ -688,4 +819,14 @@ export class ConversationsService {
 			? normalized
 			: `${normalized.slice(0, 77).trimEnd()}…`;
 	}
+}
+
+function recordOf(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
+function arrayOf(value: unknown): unknown[] {
+	return Array.isArray(value) ? value : [];
 }

@@ -47,6 +47,7 @@ import { Spinner } from "@crm/ui/components/spinner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEveAgent } from "eve/react";
 import { useEffect, useRef, useState } from "react";
+import { AgentClarificationComposer } from "@/components/agent-clarification-composer";
 import {
 	type Conversation,
 	ConversationPicker,
@@ -235,12 +236,6 @@ function Thread({
 									</div>
 								</MessageScrollerItem>
 							))}
-
-							{question ? (
-								<MessageScrollerItem messageId={question.requestId}>
-									<Question question={question} agent={agent} />
-								</MessageScrollerItem>
-							) : null}
 						</MessageScrollerContent>
 					</MessageScrollerViewport>
 
@@ -268,29 +263,40 @@ function Thread({
 				</div>
 			) : null}
 
-			<form
-				className="flex min-w-0 items-center gap-2 border-t px-4 py-3 sm:px-5"
-				onSubmit={(event) => {
-					event.preventDefault();
-					ask(draft);
-				}}
-			>
-				<Input
-					value={draft}
-					onChange={(event) => setDraft(event.target.value)}
-					placeholder={copy.placeholder}
-					disabled={locked}
-				/>
-				<Button
-					type="submit"
-					size="icon-sm"
-					variant="outline"
-					disabled={locked}
-				>
-					{busy ? <Spinner /> : <Icon icon={Send} />}
-					<span className="sr-only">Ask</span>
-				</Button>
-			</form>
+			<div className="border-t px-4 py-3 sm:px-5">
+				{question ? (
+					<AgentClarificationComposer
+						key={question.requestId}
+						question={question}
+						pending={busy}
+						onSubmit={(response) => agent.send({ inputResponses: [response] })}
+					/>
+				) : (
+					<form
+						className="flex min-w-0 items-center gap-2"
+						onSubmit={(event) => {
+							event.preventDefault();
+							ask(draft);
+						}}
+					>
+						<Input
+							value={draft}
+							onChange={(event) => setDraft(event.target.value)}
+							placeholder={copy.placeholder}
+							disabled={locked}
+						/>
+						<Button
+							type="submit"
+							size="icon-sm"
+							variant="outline"
+							disabled={locked}
+						>
+							{busy ? <Spinner /> : <Icon icon={Send} />}
+							<span className="sr-only">Ask</span>
+						</Button>
+					</form>
+				)}
+			</div>
 		</div>
 	);
 }
@@ -429,46 +435,6 @@ function AgentAvatar() {
 				<Logo className="size-3.5" />
 			</span>
 		</MessageAvatar>
-	);
-}
-
-function Question({
-	question,
-	agent,
-}: {
-	question: NonNullable<ReturnType<typeof pendingQuestion>>;
-	agent: ReturnType<typeof useEveAgent>;
-}) {
-	return (
-		<Message className="min-w-0">
-			<AgentAvatar />
-			<MessageContent>
-				<Bubble variant="tinted">
-					<BubbleContent className="text-pretty">
-						{question.prompt}
-					</BubbleContent>
-				</Bubble>
-
-				<div className="flex flex-wrap gap-2">
-					{(question.options ?? []).map((option) => (
-						<Button
-							key={option.id}
-							variant="outline"
-							size="sm"
-							onClick={() =>
-								void agent.send({
-									inputResponses: [
-										{ requestId: question.requestId, optionId: option.id },
-									],
-								})
-							}
-						>
-							{option.label}
-						</Button>
-					))}
-				</div>
-			</MessageContent>
-		</Message>
 	);
 }
 

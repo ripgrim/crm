@@ -14,6 +14,7 @@ import { ConversationSharingService } from "./conversation-sharing.service";
 import {
 	builderConversationCreateInput,
 	builderConversationSubmitInput,
+	builderQuestionResponseInput,
 	builderResourceSearchInput,
 	builderResponseRatingInput,
 	conversationEventsInput,
@@ -87,6 +88,14 @@ export class ConversationsRouter {
 		@Input() input: z.infer<typeof builderConversationSubmitInput>,
 	) {
 		return this.conversations.submitBuilder(input, ctx.user.id);
+	}
+
+	@Mutation({ input: builderQuestionResponseInput })
+	async answerBuilderQuestion(
+		@Ctx() ctx: AuthedTrpcContext,
+		@Input() input: z.infer<typeof builderQuestionResponseInput>,
+	) {
+		return this.conversations.answerBuilderQuestion(input, ctx.user.id);
 	}
 
 	@Mutation({ input: builderResponseRatingInput })

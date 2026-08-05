@@ -83,7 +83,7 @@ export async function dispatchBuilderSubmission(
 
 	try {
 		const session = await send(
-			builderMessage(submission.id, submission.message),
+			builderDeliveryMessage(submission.id, submission.message),
 			{
 				auth: {
 					authenticator: "crm-builder",
@@ -338,11 +338,19 @@ async function recoverBuilderSubmissions() {
 	});
 }
 
-function builderMessage(
+export function builderDeliveryMessage(
 	submissionId: string,
 	value: unknown,
 ): Parameters<SendFn>[0] {
 	const message = recordOf(value);
+	const inputResponse = recordOf(message.inputResponse);
+	const response =
+		typeof inputResponse.requestId === "string" &&
+		typeof inputResponse.answer === "string"
+			? inputResponse.answer.trim()
+			: "";
+	if (response) return response;
+
 	const text = typeof message.text === "string" ? message.text : "";
 	const resources = Array.isArray(message.resources) ? message.resources : [];
 	const attachments = Array.isArray(message.attachments)
