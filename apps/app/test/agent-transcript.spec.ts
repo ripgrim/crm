@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readdirSync } from "node:fs";
 import type { EveMessage } from "eve/react";
 import {
+	conversationTimeline,
 	describe as describeStep,
 	latestTurnFailure,
 	NEW_THREAD,
@@ -13,8 +14,18 @@ import {
 	toTranscript,
 } from "../lib/agent-transcript";
 
-const message = (parts: unknown[], role: "user" | "assistant" = "assistant") =>
-	({ id: "m1", role, parts }) as unknown as EveMessage;
+const message = (
+	parts: unknown[],
+	role: "user" | "assistant" = "assistant",
+	id = "m1",
+	turnId?: string,
+) =>
+	({
+		id,
+		role,
+		parts,
+		metadata: turnId ? { turnId } : undefined,
+	}) as unknown as EveMessage;
 
 const tool = (
 	toolName: string,
@@ -86,6 +97,75 @@ describe("toTranscript", () => {
 		]);
 
 		expect(grouped[0]?.items[0]).toMatchObject({ kind: "did", pending: true });
+	});
+
+	it("keeps an ask_question tool as a first-class follow-up", () => {
+		const request = {
+			requestId: "req_1",
+			kind: "question",
+			prompt: "Which account should I use?",
+			options: [{ id: "primary", label: "Primary account" }],
+		};
+		const grouped = toTranscript([
+			message([
+				{
+					type: "dynamic-tool",
+					toolName: "ask_question",
+					state: "approval-requested",
+					toolMetadata: { eve: { inputRequest: request } },
+				},
+			]),
+		]);
+
+		expect(grouped[0]?.items[0]).toMatchObject({
+			kind: "asked",
+			question: { requestId: "req_1", prompt: "Which account should I use?" },
+		});
+	});
+});
+
+describe("conversationTimeline", () => {
+	it("renders each follow-up before the answer submitted for it", () => {
+		const submissions = [
+			{ id: "opening", createdAt: "2026-08-05T10:00:00.000Z" },
+			{ id: "answer", createdAt: "2026-08-05T10:02:00.000Z" },
+		];
+		const messages = [
+			message(
+				[{ type: "text", text: "Which one?" }],
+				"assistant",
+				"a1",
+				"turn-1",
+			),
+			message([{ type: "text", text: "Got it." }], "assistant", "a2", "turn-2"),
+		];
+		const events = [
+			{
+				type: "turn.started",
+				data: { turnId: "turn-1" },
+				meta: { id: "event-1", at: "2026-08-05T10:01:00.000Z" },
+			},
+			{
+				type: "turn.started",
+				data: { turnId: "turn-2" },
+				meta: { id: "event-2", at: "2026-08-05T10:03:00.000Z" },
+			},
+		] as never;
+
+		const timeline = conversationTimeline(submissions, events, messages);
+
+		expect(timeline.map((item) => item.kind)).toEqual([
+			"submission",
+			"assistant",
+			"submission",
+			"assistant",
+		]);
+		expect(timeline.map((item) => item.id)).toEqual([
+			"submission:opening",
+			"assistant:a1",
+			"submission:answer",
+			"assistant:a2",
+		]);
 	});
 });
 

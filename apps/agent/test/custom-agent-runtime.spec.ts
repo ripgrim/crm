@@ -76,7 +76,10 @@ describe("builder command routing", () => {
 		expect(creation).toContain(
 			"Do not interrupt a sufficiently specific request",
 		);
-		expect(builderTaskMarkdown("CHAT")).toContain("Do not call agent_builder");
+		const chat = builderTaskMarkdown("CHAT");
+		expect(chat).toContain("Do not call agent_builder");
+		expect(chat).toContain("call ask_question");
+		expect(chat).toContain("one focused follow-up");
 		expect(builderTaskMarkdown(null)).toContain("private CRM assistant chat");
 	});
 });

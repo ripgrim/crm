@@ -2,11 +2,17 @@ import type { MessageStreamEvent } from "eve/client";
 import {
 	defaultMessageReducer,
 	type EveMessage,
+	type EveMessageInputRequest,
 	type EveMessagePart,
 } from "eve/react";
 
 export type TranscriptItem =
 	| { kind: "said"; id: string; mine: boolean; text: string }
+	| {
+			kind: "asked";
+			id: string;
+			question: EveMessageInputRequest;
+	  }
 	| {
 			kind: "did";
 			id: string;
@@ -81,6 +87,12 @@ export type TranscriptMessage = {
 	items: TranscriptItem[];
 };
 
+export type ConversationTimelineItem<
+	TSubmission extends { id: string; createdAt: string },
+> =
+	| { kind: "submission"; id: string; submission: TSubmission }
+	| { kind: "assistant"; id: string; message: EveMessage };
+
 export function messagesFromEvents(
 	events: readonly MessageStreamEvent[],
 ): readonly EveMessage[] {
@@ -90,6 +102,61 @@ export function messagesFromEvents(
 	for (const event of events) data = reducer.reduce(data, event);
 
 	return data.messages;
+}
+
+export function conversationTimeline<
+	TSubmission extends { id: string; createdAt: string },
+>(
+	submissions: readonly TSubmission[],
+	events: readonly MessageStreamEvent[],
+	messages: readonly EveMessage[],
+): ConversationTimelineItem<TSubmission>[] {
+	const turnTimes = new Map<string, number>();
+
+	for (const event of events) {
+		const turnId = stringOf(
+			recordOf("data" in event ? event.data : undefined).turnId,
+		);
+		if (!turnId || turnTimes.has(turnId)) continue;
+		turnTimes.set(turnId, timestampOf(event.meta.at));
+	}
+
+	const rows = [
+		...submissions.map((submission, index) => ({
+			kind: "submission" as const,
+			id: `submission:${submission.id}`,
+			submission,
+			at: timestampOf(submission.createdAt),
+			index,
+		})),
+		...messages
+			.filter((message) => message.role === "assistant")
+			.map((message, index) => ({
+				kind: "assistant" as const,
+				id: `assistant:${message.id}`,
+				message,
+				at:
+					turnTimes.get(stringOf(recordOf(message.metadata).turnId) ?? "") ??
+					Number.POSITIVE_INFINITY,
+				index,
+			})),
+	];
+
+	rows.sort((a, b) =>
+		a.at !== b.at
+			? a.at - b.at
+			: a.kind === b.kind
+				? a.index - b.index
+				: a.kind === "submission"
+					? -1
+					: 1,
+	);
+
+	return rows.map((row) =>
+		row.kind === "submission"
+			? { kind: row.kind, id: row.id, submission: row.submission }
+			: { kind: row.kind, id: row.id, message: row.message },
+	);
 }
 
 export function toTranscript(
@@ -106,6 +173,13 @@ export function toTranscript(
 					const text = part.text.trim();
 					if (!text) return [];
 					return [{ kind: "said", id, mine: message.role === "user", text }];
+				}
+
+				if (part.type === "dynamic-tool") {
+					const request = part.toolMetadata?.eve?.inputRequest;
+					if (request?.kind === "question") {
+						return [{ kind: "asked", id, question: request }];
+					}
 				}
 
 				if (part.type.startsWith("tool-") || part.type === "dynamic-tool") {
@@ -257,6 +331,15 @@ function recordOf(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: {};
+}
+
+function stringOf(value: unknown): string | null {
+	return typeof value === "string" && value ? value : null;
+}
+
+function timestampOf(value: string): number {
+	const timestamp = Date.parse(value);
+	return Number.isFinite(timestamp) ? timestamp : Number.POSITIVE_INFINITY;
 }
 
 function hostOf(url: string): string {

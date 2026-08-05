@@ -10,6 +10,7 @@ import Copy from "@carbon/icons-react/es/Copy";
 import Partnership from "@carbon/icons-react/es/Partnership";
 import Play from "@carbon/icons-react/es/Play";
 import Renew from "@carbon/icons-react/es/Renew";
+import Reply from "@carbon/icons-react/es/Reply";
 import ThumbsDown from "@carbon/icons-react/es/ThumbsDown";
 import ThumbsUp from "@carbon/icons-react/es/ThumbsUp";
 import User from "@carbon/icons-react/es/User";
@@ -25,6 +26,7 @@ import { Skeleton } from "@crm/ui/components/skeleton";
 import { cn } from "@crm/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MessageStreamEvent } from "eve/client";
+import type { EveMessage, EveMessageInputRequest } from "eve/react";
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -38,6 +40,7 @@ import {
 } from "@/lib/agent-builder";
 import {
 	type AgentTurnFailure,
+	conversationTimeline,
 	latestTurnFailure,
 	messagesFromEvents,
 	pendingQuestion,
@@ -66,6 +69,7 @@ type DraftVersion = {
 
 type BuilderSubmission = {
 	id: string;
+	createdAt: string;
 	commandType: "CHAT" | "CREATE_AGENT";
 	message: unknown;
 	status: string;
@@ -171,6 +175,12 @@ export function AgentBuilderChat({
 	const persistedEvents = (events.data ??
 		[]) as unknown as MessageStreamEvent[];
 	const agentMessages = messagesFromEvents(persistedEvents);
+	const timeline = conversationTimeline(
+		submissions,
+		persistedEvents,
+		agentMessages,
+	);
+	const answeredQuestionIds = questionResponseIds(submissions);
 	const waitingQuestion = pendingQuestion(agentMessages);
 	const question =
 		waitingQuestion &&
@@ -212,21 +222,23 @@ export function AgentBuilderChat({
 
 			<div className="min-h-0 flex-1 overflow-y-auto">
 				<div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6 sm:gap-5 sm:px-5 sm:py-9">
-					{submissions.map((submission) => (
-						<UserSubmission
-							key={submission.id}
-							submission={submission}
-							failed={submission.status === "FAILED"}
-							error={submission.errorMessage}
-						/>
-					))}
-
-					{agentMessages.length > 0 ? (
-						<AssistantTranscript
-							conversation={data}
-							agentMessages={agentMessages}
-						/>
-					) : null}
+					{timeline.map((item) =>
+						item.kind === "submission" ? (
+							<UserSubmission
+								key={item.id}
+								submission={item.submission}
+								failed={item.submission.status === "FAILED"}
+								error={item.submission.errorMessage}
+							/>
+						) : (
+							<AssistantMessage
+								key={item.id}
+								conversation={data}
+								message={item.message}
+								answeredQuestionIds={answeredQuestionIds}
+							/>
+						),
+					)}
 
 					{working && creatingAgent ? (
 						<BuildingAgentCard
@@ -319,8 +331,12 @@ function SharedAgentChat({
 }: {
 	conversation: SharedConversation;
 }) {
-	const submissions = conversation.submissions as BuilderSubmission[];
+	const submissions =
+		conversation.submissions as unknown as BuilderSubmission[];
 	const events = conversation.events as unknown as MessageStreamEvent[];
+	const messages = messagesFromEvents(events);
+	const timeline = conversationTimeline(submissions, events, messages);
+	const answeredQuestionIds = questionResponseIds(submissions);
 
 	return (
 		<main className="flex min-h-0 flex-1 flex-col">
@@ -341,18 +357,23 @@ function SharedAgentChat({
 						</p>
 					</div>
 
-					{submissions.map((submission) => (
-						<UserSubmission
-							key={submission.id}
-							submission={submission}
-							failed={submission.status === "FAILED"}
-							error={submission.errorMessage}
-						/>
-					))}
-
-					{events.length > 0 ? (
-						<SharedAssistantTranscript events={events} />
-					) : null}
+					{timeline.map((item) =>
+						item.kind === "submission" ? (
+							<UserSubmission
+								key={item.id}
+								submission={item.submission}
+								failed={item.submission.status === "FAILED"}
+								error={item.submission.errorMessage}
+							/>
+						) : (
+							<AssistantMessage
+								key={item.id}
+								conversation={null}
+								message={item.message}
+								answeredQuestionIds={answeredQuestionIds}
+							/>
+						),
+					)}
 
 					{conversation.builderArtifacts.length > 0 ? (
 						<AgentCodeWorkspace
@@ -364,45 +385,6 @@ function SharedAgentChat({
 			</div>
 		</main>
 	);
-}
-
-function SharedAssistantTranscript({
-	events,
-}: {
-	events: MessageStreamEvent[];
-}) {
-	const messages = toTranscript(messagesFromEvents(events)).filter(
-		(message) => !message.mine,
-	);
-
-	return messages.map((message) => {
-		const markdown = message.items
-			.filter((item) => item.kind === "said")
-			.map((item) => item.text)
-			.join("\n\n");
-
-		return markdown ? (
-			<div
-				key={message.id}
-				className="flex w-full min-w-0 max-w-[640px] flex-col gap-2"
-			>
-				<Markdown className="wrap-break-word text-sm leading-5">
-					{markdown}
-				</Markdown>
-				<Button
-					variant="ghost"
-					size="icon-xs"
-					aria-label="Copy response as Markdown"
-					onClick={() => {
-						void navigator.clipboard.writeText(markdown);
-						toast.success("Response copied as Markdown.");
-					}}
-				>
-					<Icon icon={Copy} />
-				</Button>
-			</div>
-		) : null;
-	});
 }
 
 function ChatHeader({
@@ -466,10 +448,23 @@ function UserSubmission({
 			? consumeBuilderCommand(message.text)
 			: null;
 	const text = command?.body ?? message.text;
+	const response = inputResponseOf(submission.message);
 
 	return (
 		<div className="flex min-w-0 w-full justify-end">
-			<div className="flex w-fit min-w-0 max-w-full flex-col gap-2 rounded-md bg-muted px-3 py-2.5 text-sm leading-5 sm:max-w-[620px] sm:px-3.5 sm:py-3">
+			<div
+				className={cn(
+					"flex w-fit min-w-0 max-w-full flex-col gap-2 rounded-md bg-muted px-3 py-2.5 text-sm leading-5 sm:max-w-[620px] sm:px-3.5 sm:py-3",
+					response &&
+						"max-w-sm gap-1.5 border-ring border-r-2 bg-muted/70 py-2 sm:max-w-sm sm:py-2.5",
+				)}
+			>
+				{response ? (
+					<div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+						<Icon icon={Reply} className="size-3.5" />
+						<span>Answer to follow-up</span>
+					</div>
+				) : null}
 				{submission.commandType === "CREATE_AGENT" ? (
 					<div className="flex flex-wrap gap-1">
 						<ChatCommandChip label="Create agent" icon={Application} />
@@ -503,65 +498,112 @@ function UserSubmission({
 	);
 }
 
-function AssistantTranscript({
+function AssistantMessage({
 	conversation,
-	agentMessages,
+	message,
+	answeredQuestionIds,
 }: {
-	conversation: Conversation;
-	agentMessages: ReturnType<typeof messagesFromEvents>;
+	conversation: Conversation | null;
+	message: EveMessage;
+	answeredQuestionIds: ReadonlySet<string>;
 }) {
-	const messages = toTranscript(agentMessages).filter(
-		(message) => !message.mine,
-	);
+	const [transcript] = toTranscript([message]);
+	if (!transcript || transcript.mine) return null;
+
+	const markdown = transcript.items
+		.filter((item) => item.kind === "said")
+		.map((item) => item.text)
+		.join("\n\n");
 
 	return (
-		<>
-			{messages.map((message) => {
-				const markdown = message.items
-					.filter((item) => item.kind === "said")
-					.map((item) => item.text)
-					.join("\n\n");
-
-				return (
+		<div className="flex w-full min-w-0 max-w-[640px] flex-col gap-2">
+			{markdown ? (
+				<Markdown className="wrap-break-word text-sm leading-5">
+					{markdown}
+				</Markdown>
+			) : null}
+			{transcript.items.map((item) =>
+				item.kind === "asked" &&
+				(conversation === null ||
+					answeredQuestionIds.has(item.question.requestId)) ? (
+					<FollowUpTranscriptItem
+						key={item.id}
+						question={item.question}
+						answered={answeredQuestionIds.has(item.question.requestId)}
+					/>
+				) : null,
+			)}
+			{transcript.items
+				.filter((item) => item.kind === "did")
+				.map((item) => (
 					<div
-						key={message.id}
-						className="flex w-full min-w-0 max-w-[640px] flex-col gap-2"
+						key={item.id}
+						className="flex min-w-0 items-start gap-2 text-muted-foreground text-xs"
 					>
-						{markdown ? (
-							<Markdown className="wrap-break-word text-sm leading-5">
-								{markdown}
-							</Markdown>
-						) : null}
-						{message.items
-							.filter((item) => item.kind === "did")
-							.map((item) => (
-								<div
-									key={item.id}
-									className="flex min-w-0 items-start gap-2 text-muted-foreground text-xs"
-								>
-									{item.pending ? (
-										<Icon
-											icon={Renew}
-											className="size-3.5 animate-spin"
-											motion="none"
-										/>
-									) : (
-										<Icon icon={Checkmark} className="size-3.5 text-ring" />
-									)}
-									<span className="min-w-0 wrap-break-word">{item.label}</span>
-								</div>
-							))}
-						{markdown ? (
-							<ResponseActions
-								conversation={conversation}
-								messageId={message.id}
-								markdown={markdown}
+						{item.pending ? (
+							<Icon
+								icon={Renew}
+								className="size-3.5 animate-spin"
+								motion="none"
 							/>
-						) : null}
+						) : (
+							<Icon icon={Checkmark} className="size-3.5 text-ring" />
+						)}
+						<span className="min-w-0 wrap-break-word">{item.label}</span>
 					</div>
-				);
-			})}
-		</>
+				))}
+			{markdown ? (
+				conversation ? (
+					<ResponseActions
+						conversation={conversation}
+						messageId={transcript.id}
+						markdown={markdown}
+					/>
+				) : (
+					<CopyResponseAction markdown={markdown} />
+				)
+			) : null}
+		</div>
+	);
+}
+
+function FollowUpTranscriptItem({
+	question,
+	answered,
+}: {
+	question: EveMessageInputRequest;
+	answered: boolean;
+}) {
+	return (
+		<div className="w-full max-w-sm border-ring/50 border-l-2 bg-muted/40 px-3 py-2.5">
+			<div className="flex items-center justify-between gap-3 text-xs">
+				<span className="font-medium">Follow-up</span>
+				<span className="text-muted-foreground">
+					{answered ? "Answered" : "Waiting for your answer"}
+				</span>
+			</div>
+			<Markdown className="mt-1.5 max-h-24 overflow-y-auto wrap-break-word text-sm leading-5">
+				{question.prompt}
+			</Markdown>
+		</div>
+	);
+}
+
+function CopyResponseAction({ markdown }: { markdown: string }) {
+	return (
+		<div className="flex h-7 items-center">
+			<Button
+				variant="ghost"
+				size="icon-xs"
+				aria-label="Copy response as Markdown"
+				onClick={() => {
+					void navigator.clipboard.writeText(markdown);
+					toast.success("Response copied as Markdown.");
+				}}
+			>
+				<Icon icon={Copy} />
+			</Button>
+		</div>
 	);
 }
 
@@ -1119,9 +1161,30 @@ function hasQueuedQuestionResponse(
 			return false;
 		}
 
-		const response = recordOf(recordOf(submission.message).inputResponse);
-		return response.requestId === requestId;
+		return inputResponseOf(submission.message)?.requestId === requestId;
 	});
+}
+
+function questionResponseIds(
+	submissions: readonly BuilderSubmission[],
+): ReadonlySet<string> {
+	return new Set(
+		submissions.flatMap((submission) => {
+			if (submission.status === "FAILED" || submission.status === "CANCELLED") {
+				return [];
+			}
+
+			const response = inputResponseOf(submission.message);
+			return response ? [response.requestId] : [];
+		}),
+	);
+}
+
+function inputResponseOf(message: unknown): { requestId: string } | null {
+	const response = recordOf(recordOf(message).inputResponse);
+	return typeof response.requestId === "string" && response.requestId
+		? { requestId: response.requestId }
+		: null;
 }
 
 function retryPromptOf(

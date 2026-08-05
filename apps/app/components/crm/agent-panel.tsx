@@ -391,6 +391,17 @@ function Item({ item }: { item: TranscriptItem }) {
 		);
 	}
 
+	if (item.kind === "asked") {
+		return (
+			<div className="w-full max-w-sm border-ring/50 border-l-2 bg-muted/40 px-3 py-2.5">
+				<p className="font-medium text-xs">Follow-up</p>
+				<Markdown className="mt-1.5 max-h-24 overflow-y-auto wrap-break-word text-sm leading-5">
+					{item.question.prompt}
+				</Markdown>
+			</div>
+		);
+	}
+
 	return (
 		<div className="min-w-0 space-y-1.5">
 			<Marker>

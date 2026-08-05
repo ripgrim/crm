@@ -72,18 +72,19 @@ export function AgentClarificationComposer({
 		>
 			<div className="px-1 pt-0.5">
 				<p className="font-medium text-xs">Quick follow-up</p>
-				<Markdown className="mt-1 max-h-48 overflow-y-auto text-pretty text-sm leading-5">
+				<Markdown className="mt-1 max-h-32 overflow-y-auto text-pretty text-sm leading-5">
 					{question.prompt}
 				</Markdown>
 			</div>
 
 			{options.length > 0 ? (
-				<div className="mt-3">
+				<div className="mt-2">
 					<ToggleGroup
 						type="single"
 						orientation="vertical"
 						variant="outline"
 						size="choice"
+						spacing={1}
 						value={selectedOptionId}
 						disabled={pending}
 						onValueChange={(value) => {
@@ -94,11 +95,11 @@ export function AgentClarificationComposer({
 					>
 						{options.map((option) => (
 							<ToggleGroupItem key={option.id} value={option.id}>
-								<span className="w-full wrap-break-word font-medium">
+								<span className="w-full wrap-break-word font-medium leading-4">
 									{option.label}
 								</span>
 								{option.description ? (
-									<span className="w-full wrap-break-word font-normal text-muted-foreground text-xs">
+									<span className="w-full wrap-break-word font-normal text-[11px] text-muted-foreground leading-4">
 										{option.description}
 									</span>
 								) : null}
@@ -109,7 +110,7 @@ export function AgentClarificationComposer({
 			) : null}
 
 			{showFreeform ? (
-				<div className="mt-3 px-1">
+				<div className="mt-2 px-1">
 					<label
 						htmlFor={answerId}
 						className="font-medium text-muted-foreground text-xs"
@@ -125,7 +126,8 @@ export function AgentClarificationComposer({
 							}}
 							placeholder="Add the detail the agent needs"
 							variant="composer"
-							rows={2}
+							size="composer"
+							rows={1}
 							disabled={pending}
 							aria-invalid={Boolean(error)}
 							aria-describedby={error ? errorId : undefined}
@@ -134,7 +136,7 @@ export function AgentClarificationComposer({
 				</div>
 			) : null}
 
-			<div className="mt-3 flex min-h-7 items-center justify-between gap-3 px-1">
+			<div className="mt-2 flex min-h-7 items-center justify-between gap-3 px-1">
 				{error ? (
 					<p id={errorId} role="alert" className="text-destructive text-xs">
 						{error}
