@@ -102,7 +102,9 @@ export function toTranscript(
 							label: describe(part),
 							tone: outcomeTone(part),
 							pending:
-								state === "input-streaming" || state === "input-available",
+								state === "input-streaming" ||
+								state === "input-available" ||
+								state === "approval-requested",
 							sources: sourcesOf(part),
 						},
 					];
@@ -184,10 +186,12 @@ export function sourcesOf(part: EveMessagePart): Source[] {
 
 export function pendingQuestion(messages: readonly EveMessage[]) {
 	for (const part of messages.at(-1)?.parts ?? []) {
-		if (part.type !== "dynamic-tool") continue;
+		if (part.type !== "dynamic-tool" || part.state !== "approval-requested") {
+			continue;
+		}
 
 		const request = part.toolMetadata?.eve?.inputRequest;
-		if (request) return request;
+		if (request?.kind === "question") return request;
 	}
 
 	return null;

@@ -54,8 +54,11 @@ describe("session purpose boundaries", () => {
 
 describe("builder command routing", () => {
 	it("delegates only the explicit creation command to the agent builder", () => {
-		expect(builderTaskMarkdown("CREATE_AGENT")).toContain(
-			"Call agent_builder exactly once",
+		const creation = builderTaskMarkdown("CREATE_AGENT");
+		expect(creation).toContain("Call agent_builder exactly once");
+		expect(creation).toContain("call ask_question");
+		expect(creation).toContain(
+			"Do not interrupt a sufficiently specific request",
 		);
 		expect(builderTaskMarkdown("CHAT")).toContain("Do not call agent_builder");
 		expect(builderTaskMarkdown(null)).toContain("private CRM assistant chat");

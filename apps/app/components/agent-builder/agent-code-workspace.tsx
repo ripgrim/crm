@@ -37,7 +37,6 @@ export function AgentCodeWorkspace({
 	return (
 		<AgentCodeWorkspaceSurface
 			key={paths.join("|")}
-			artifacts={artifacts}
 			latest={latest}
 			paths={paths}
 			working={working}
@@ -46,12 +45,10 @@ export function AgentCodeWorkspace({
 }
 
 function AgentCodeWorkspaceSurface({
-	artifacts,
 	latest,
 	paths,
 	working,
 }: {
-	artifacts: AgentCodeArtifact[];
 	latest: Map<string, AgentCodeArtifact>;
 	paths: string[];
 	working: boolean;
@@ -70,9 +67,6 @@ function AgentCodeWorkspaceSurface({
 	const selectedPath =
 		selection.find((path) => latest.has(path)) ?? paths[0] ?? null;
 	const artifact = selectedPath ? latest.get(selectedPath) : null;
-	const revisions = artifact
-		? artifacts.filter((item) => item.path === artifact.path)
-		: [];
 	const previous = artifact?.previousContent ?? null;
 	const showChanges = mode === "changes" && previous !== null;
 
@@ -88,9 +82,9 @@ function AgentCodeWorkspaceSurface({
 	return (
 		<section
 			aria-label="Generated agent files"
-			className="overflow-hidden rounded-lg border bg-card"
+			className="overflow-hidden rounded-lg bg-muted/40"
 		>
-			<header className="flex min-h-11 flex-wrap items-center gap-2 border-b px-3 py-2 sm:px-4">
+			<header className="flex min-h-11 flex-wrap items-center gap-2 px-3 py-2">
 				<span className="flex min-w-0 flex-1 items-center gap-2">
 					<Icon
 						icon={working ? Renew : Checkmark}
@@ -102,8 +96,8 @@ function AgentCodeWorkspaceSurface({
 					<span className="truncate font-medium text-sm">
 						{working ? "Writing agent files" : "Agent files"}
 					</span>
-					<span className="shrink-0 font-mono text-muted-foreground text-xs">
-						{paths.length}/3
+					<span className="shrink-0 text-muted-foreground text-xs">
+						{paths.length} {paths.length === 1 ? "file" : "files"}
 					</span>
 				</span>
 				<fieldset
@@ -128,8 +122,8 @@ function AgentCodeWorkspaceSurface({
 				</fieldset>
 			</header>
 
-			<div className="grid min-h-0 md:grid-cols-[190px_minmax(0,1fr)]">
-				<div className="h-40 min-w-0 border-b bg-muted/20 p-2 md:h-[360px] md:border-r md:border-b-0">
+			<div className="mx-2 mb-2 grid min-h-0 overflow-hidden rounded-md bg-background md:grid-cols-[190px_minmax(0,1fr)]">
+				<div className="h-36 min-w-0 border-b border-border/60 bg-muted/15 p-2 md:h-[360px] md:border-r md:border-b-0">
 					<FileTree
 						model={model}
 						aria-label="Agent files"
@@ -137,17 +131,6 @@ function AgentCodeWorkspaceSurface({
 					/>
 				</div>
 				<div className="min-w-0 overflow-auto bg-background md:h-[360px]">
-					<div className="flex h-8 items-center gap-2 border-b px-3 text-xs">
-						<span className="min-w-0 flex-1 truncate font-mono">
-							{artifact.path}
-						</span>
-						<span className="shrink-0 text-muted-foreground">
-							revision {artifact.revision}
-						</span>
-						<span className="sr-only" aria-live="polite">
-							{artifact.status === "READY" ? "Ready" : "Writing"}
-						</span>
-					</div>
 					{showChanges ? (
 						<MultiFileDiff
 							oldFile={{
@@ -173,11 +156,6 @@ function AgentCodeWorkspaceSurface({
 					)}
 				</div>
 			</div>
-			<footer className="border-t px-3 py-2 text-muted-foreground text-xs sm:px-4">
-				{working
-					? "Files are saved as the builder works. You can leave and come back without losing progress."
-					: `${revisions.length} saved ${revisions.length === 1 ? "revision" : "revisions"} for this file.`}
-			</footer>
 		</section>
 	);
 }

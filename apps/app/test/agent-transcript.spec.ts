@@ -185,6 +185,7 @@ describe("sourcesOf", () => {
 describe("pendingQuestion", () => {
 	const request = {
 		requestId: "req_1",
+		kind: "question",
 		prompt: "Which one?",
 		options: [{ id: "a", label: "The first" }],
 	};
@@ -195,6 +196,7 @@ describe("pendingQuestion", () => {
 				{
 					type: "dynamic-tool",
 					toolName: "ask_question",
+					state: "approval-requested",
 					toolMetadata: { eve: { inputRequest: request } },
 				},
 			]),
@@ -208,12 +210,28 @@ describe("pendingQuestion", () => {
 			{
 				type: "dynamic-tool",
 				toolName: "ask_question",
+				state: "approval-requested",
 				toolMetadata: { eve: { inputRequest: request } },
 			},
 		]);
 		const answered = message([{ type: "text", text: "Thanks." }]);
 
 		expect(pendingQuestion([asked, answered])).toBeNull();
+	});
+
+	it("ignores a question that already has a response", () => {
+		expect(
+			pendingQuestion([
+				message([
+					{
+						type: "dynamic-tool",
+						toolName: "ask_question",
+						state: "approval-responded",
+						toolMetadata: { eve: { inputRequest: request } },
+					},
+				]),
+			]),
+		).toBeNull();
 	});
 
 	it("finds nothing in an empty transcript", () => {

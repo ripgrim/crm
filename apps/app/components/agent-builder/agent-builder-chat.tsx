@@ -20,9 +20,9 @@ import {
 } from "@crm/ui/components/async-action";
 import { Button } from "@crm/ui/components/button";
 import { Icon } from "@crm/ui/components/icon";
+import { Input } from "@crm/ui/components/input";
 import { Markdown } from "@crm/ui/components/markdown";
 import { Skeleton } from "@crm/ui/components/skeleton";
-import { TaskSteps } from "@crm/ui/components/task-steps";
 import { cn } from "@crm/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MessageStreamEvent } from "eve/client";
@@ -37,6 +37,7 @@ import {
 import {
 	type AgentTurnFailure,
 	latestTurnFailure,
+	pendingQuestion,
 	toTranscript,
 } from "@/lib/agent-transcript";
 import { useTRPC } from "@/lib/trpc/client";
@@ -66,6 +67,12 @@ type BuilderSubmission = {
 	message: unknown;
 	status: string;
 	errorMessage: string | null;
+};
+
+type ClarificationResponse = {
+	requestId: string;
+	optionId?: string;
+	text?: string;
 };
 
 export function AgentBuilderChat({
@@ -149,6 +156,7 @@ export function AgentBuilderChat({
 	const failure = latestTurnFailure(events.data ?? []);
 	const creatingAgent = hasCreateAgentCommand(submissions);
 	const working = isWorking(data, creatingAgent) && !failure;
+	const awaitingInput = events.data?.at(-1)?.type === "session.waiting";
 	const retryPrompt = retryPromptOf(submissions.at(-1));
 	const send = (prompt: BuilderPrompt) => {
 		submit.mutate({
@@ -259,7 +267,7 @@ export function AgentBuilderChat({
 					<AgentComposer
 						mode="chat"
 						pending={submit.isPending}
-						disabled={working}
+						disabled={working || awaitingInput}
 						onSubmit={send}
 					/>
 				</div>
@@ -465,10 +473,43 @@ function AssistantTranscript({
 	conversation: Conversation;
 	events: MessageStreamEvent[];
 }) {
-	const agent = useEveAgent({ initialEvents: events });
+	const trpc = useTRPC();
+	const queryClient = useQueryClient();
+	const agent = useEveAgent({
+		headers: { "x-crm-builder-conversation": conversation.id },
+		initialEvents: events,
+		...(conversation.sessionId
+			? {
+					initialSession: {
+						sessionId: conversation.sessionId,
+						streamIndex: conversation.streamIndex,
+						...(conversation.continuationToken
+							? { continuationToken: conversation.continuationToken }
+							: {}),
+					},
+				}
+			: {}),
+		onError: (error) => toast.error(error.message),
+	});
 	const messages = toTranscript(agent.data.messages).filter(
 		(message) => !message.mine,
 	);
+	const question = pendingQuestion(agent.data.messages);
+	const latestMessageId = messages.at(-1)?.id;
+	const answerQuestion = async (response: ClarificationResponse) => {
+		await agent.send({ inputResponses: [response] });
+		await Promise.all([
+			queryClient.invalidateQueries({
+				queryKey: trpc.conversations.builderById.pathKey(),
+			}),
+			queryClient.invalidateQueries({
+				queryKey: trpc.conversations.builderList.pathKey(),
+			}),
+			queryClient.invalidateQueries({
+				queryKey: trpc.conversations.events.pathKey(),
+			}),
+		]);
+	};
 
 	return (
 		<>
@@ -514,10 +555,119 @@ function AssistantTranscript({
 								markdown={markdown}
 							/>
 						) : null}
+						{question && message.id === latestMessageId ? (
+							<ClarificationCard
+								key={question.requestId}
+								question={question}
+								pending={
+									agent.status === "submitted" || agent.status === "streaming"
+								}
+								onAnswer={answerQuestion}
+							/>
+						) : null}
 					</div>
 				);
 			})}
 		</>
+	);
+}
+
+function ClarificationCard({
+	question,
+	pending,
+	onAnswer,
+}: {
+	question: NonNullable<ReturnType<typeof pendingQuestion>>;
+	pending: boolean;
+	onAnswer: (response: ClarificationResponse) => Promise<void>;
+}) {
+	const [answer, setAnswer] = useState("");
+	const options = question.options ?? [];
+	const showFreeform =
+		question.display === "text" ||
+		question.allowFreeform === true ||
+		options.length === 0;
+
+	const submitAnswer = () => {
+		const text = answer.trim();
+		if (!text || pending) return;
+		void onAnswer({ requestId: question.requestId, text });
+	};
+
+	return (
+		<div className="ml-3 border-ring/50 border-l-2 pl-3">
+			<div className="rounded-r-lg bg-muted/50 px-3 py-3 sm:px-4">
+				<p className="font-medium text-xs">Before I continue</p>
+				<Markdown className="mt-1 text-pretty text-sm leading-5">
+					{question.prompt}
+				</Markdown>
+
+				{options.length > 0 ? (
+					<div className="mt-3 flex flex-wrap gap-2">
+						{options.map((option) => (
+							<Button
+								key={option.id}
+								type="button"
+								variant={
+									option.style === "danger"
+										? "destructive"
+										: option.style === "primary"
+											? "default"
+											: "outline"
+								}
+								size="sm"
+								className="h-auto min-h-8 max-w-full flex-col items-start whitespace-normal text-left"
+								disabled={pending}
+								onClick={() =>
+									void onAnswer({
+										requestId: question.requestId,
+										optionId: option.id,
+									})
+								}
+							>
+								<span>{option.label}</span>
+								{option.description ? (
+									<span className="font-normal text-current/70 text-xs">
+										{option.description}
+									</span>
+								) : null}
+							</Button>
+						))}
+					</div>
+				) : null}
+
+				{showFreeform ? (
+					<form
+						className="mt-3 flex min-w-0 gap-2"
+						onSubmit={(event) => {
+							event.preventDefault();
+							submitAnswer();
+						}}
+					>
+						<Input
+							value={answer}
+							onChange={(event) => setAnswer(event.target.value)}
+							placeholder="Type another answer"
+							aria-label="Answer the agent's question"
+							disabled={pending}
+						/>
+						<Button
+							type="submit"
+							size="sm"
+							disabled={!answer.trim() || pending}
+						>
+							{pending ? "Sending" : "Send"}
+						</Button>
+					</form>
+				) : null}
+
+				{pending ? (
+					<span className="sr-only" role="status">
+						Sending your answer
+					</span>
+				) : null}
+			</div>
+		</div>
 	);
 }
 
@@ -603,28 +753,7 @@ function BuildingAgentCard({
 				: sessionId
 					? 1
 					: 0;
-	const steps = [
-		{
-			id: "context",
-			label: "Inspect the requested scope",
-			meta: "CRM records and connected sources",
-		},
-		{
-			id: "instructions",
-			label: "Write the agent instructions",
-			meta: "Trigger, boundaries, and stopping rules",
-		},
-		{
-			id: "manifest",
-			label: "Define the agent manifest",
-			meta: "Data scope and allowed actions",
-		},
-		{
-			id: "review",
-			label: "Prepare the private draft",
-			meta: "Saved for your review",
-		},
-	] as const;
+	const steps = ["Scope", "Instructions", "Manifest", "Review"] as const;
 	const stop = useAsyncAction({
 		action: async () => {
 			if (!sessionId) return;
@@ -644,8 +773,8 @@ function BuildingAgentCard({
 				I’m turning this into a team agent. I’ll inspect the CRM scope, verify
 				the requested connections, then prepare a safe deployment for review.
 			</p>
-			<div className="overflow-hidden rounded-lg border bg-card">
-				<div className="flex flex-wrap items-center gap-3 border-b px-4 py-3 sm:gap-4 sm:px-5 sm:py-4">
+			<div className="overflow-hidden rounded-lg bg-muted/40">
+				<div className="flex flex-wrap items-center gap-3 px-4 pt-4 pb-2">
 					<Icon
 						icon={Renew}
 						className="size-3.5 animate-spin text-ring"
@@ -657,8 +786,61 @@ function BuildingAgentCard({
 					<span className="font-mono text-muted-foreground text-xs">
 						{completed} of 4
 					</span>
+				</div>
+				<ol
+					className="grid grid-cols-4 gap-2 px-3 py-4 sm:px-4"
+					aria-label="Agent creation"
+				>
+					{steps.map((label, index) => {
+						const done = index < completed;
+						const active = index === completed && completed < steps.length;
+
+						return (
+							<li
+								key={label}
+								className="flex min-w-0 flex-col items-center gap-2 text-center"
+								aria-current={active ? "step" : undefined}
+							>
+								<span
+									className={cn(
+										"flex size-6 items-center justify-center rounded-full text-[11px]",
+										done && "bg-ring text-background",
+										active && "bg-background text-ring",
+										!done &&
+											!active &&
+											"bg-background/60 text-muted-foreground",
+									)}
+								>
+									{done ? (
+										<Icon icon={Checkmark} className="size-3.5" />
+									) : active ? (
+										<Icon
+											icon={Renew}
+											className="size-3.5 animate-spin"
+											motion="none"
+										/>
+									) : (
+										index + 1
+									)}
+								</span>
+								<span
+									className={cn(
+										"min-w-0 wrap-break-word text-[11px] leading-4 sm:text-xs",
+										!done && !active && "text-muted-foreground",
+									)}
+								>
+									{label}
+								</span>
+							</li>
+						);
+					})}
+				</ol>
+				<footer className="flex min-h-12 flex-wrap items-center gap-3 bg-background/55 px-4 py-2.5">
+					<p className="min-w-0 flex-1 text-pretty text-muted-foreground text-xs">
+						You can leave this chat. I’ll keep working in the background.
+					</p>
 					<Button
-						variant="outline"
+						variant="ghost"
 						size="sm"
 						disabled={!sessionId || stop.pending}
 						aria-busy={stop.pending}
@@ -673,16 +855,7 @@ function BuildingAgentCard({
 							Stop
 						</AsyncButtonContent>
 					</Button>
-				</div>
-				<TaskSteps
-					steps={[...steps]}
-					current={completed}
-					label="Agent creation"
-				/>
-				<p className="border-t px-4 py-3 text-muted-foreground text-xs sm:px-5">
-					This chat keeps running if you leave. You’ll see a dot in the sidebar
-					when there’s a response.
-				</p>
+				</footer>
 			</div>
 		</div>
 	);
