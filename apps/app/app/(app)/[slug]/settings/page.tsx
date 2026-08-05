@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import {
 	PageShell,
 	PageShellContent,
 	PageShellDescription,
 	PageShellHeader,
 	PageShellHeading,
+	PageShellLoading,
 	PageShellTitle,
 } from "@/components/page-shell";
 import { requireSession } from "@/lib/session";
@@ -18,7 +20,28 @@ export const metadata: Metadata = {
 	title: "General",
 };
 
-export default async function GeneralSettingsPage() {
+export default function GeneralSettingsPage() {
+	return (
+		<PageShell>
+			<PageShellHeader>
+				<PageShellHeading>
+					<PageShellTitle>General</PageShellTitle>
+					<PageShellDescription>
+						Who you are, and the model the research agent thinks with.
+					</PageShellDescription>
+				</PageShellHeading>
+			</PageShellHeader>
+
+			<PageShellContent>
+				<Suspense fallback={<PageShellLoading />}>
+					<Settings />
+				</Suspense>
+			</PageShellContent>
+		</PageShell>
+	);
+}
+
+async function Settings() {
 	await requireSession();
 
 	const trpc = getServerTrpc();
@@ -32,25 +55,12 @@ export default async function GeneralSettingsPage() {
 	]);
 
 	return (
-		<PageShell>
-			<PageShellHeader>
-				<PageShellHeading>
-					<PageShellTitle>General</PageShellTitle>
-					<PageShellDescription>
-						Who you are, and the model the research agent thinks with.
-					</PageShellDescription>
-				</PageShellHeading>
-			</PageShellHeader>
-
-			<PageShellContent>
-				<HydrateClient>
-					<div className="flex max-w-3xl flex-col gap-6">
-						<WorkspaceForm />
-						<ResearchKey />
-						<AgentModel />
-					</div>
-				</HydrateClient>
-			</PageShellContent>
-		</PageShell>
+		<HydrateClient>
+			<div className="flex max-w-3xl flex-col gap-6">
+				<WorkspaceForm />
+				<ResearchKey />
+				<AgentModel />
+			</div>
+		</HydrateClient>
 	);
 }

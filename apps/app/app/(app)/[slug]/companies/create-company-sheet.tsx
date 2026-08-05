@@ -30,7 +30,7 @@ import {
 import { Spinner } from "@crm/ui/components/spinner";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { parseAsBoolean, useQueryState } from "nuqs";
-import { useId, useState } from "react";
+import { Suspense, useId, useState } from "react";
 import { toast } from "sonner";
 import { useOpenRecord } from "@/components/crm/record-sheet/record-stack";
 import { useCrmCache } from "@/lib/trpc/cache";
@@ -38,7 +38,24 @@ import { useTRPC } from "@/lib/trpc/client";
 
 const UNASSIGNED = "unassigned";
 
+function AddButton({ disabled }: { disabled?: boolean }) {
+	return (
+		<Button disabled={disabled}>
+			<Icon icon={Add} data-icon="inline-start" />
+			New company
+		</Button>
+	);
+}
+
 export function CreateCompanySheet() {
+	return (
+		<Suspense fallback={<AddButton disabled />}>
+			<CreateCompanyForm />
+		</Suspense>
+	);
+}
+
+function CreateCompanyForm() {
 	const openRecord = useOpenRecord();
 	const trpc = useTRPC();
 	const cache = useCrmCache();
@@ -74,10 +91,7 @@ export function CreateCompanySheet() {
 	return (
 		<Sheet open={open} onOpenChange={(next) => setOpen(next || null)}>
 			<SheetTrigger asChild>
-				<Button>
-					<Icon icon={Add} data-icon="inline-start" />
-					New company
-				</Button>
+				<AddButton />
 			</SheetTrigger>
 			<SheetContent side="right">
 				<SheetHeader>

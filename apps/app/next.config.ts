@@ -35,9 +35,8 @@ const nextConfig: NextConfig = {
 		],
 	},
 
-	experimental: {
-		viewTransition: true,
-	},
+	cacheComponents: true,
+	partialPrefetching: true,
 };
 
 export default nextConfig;

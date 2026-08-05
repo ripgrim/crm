@@ -9,6 +9,8 @@ export const metadata: Metadata = {
 	title: "Grant access",
 };
 
+export const instant = false;
+
 export default async function GrantAccessPage() {
 	const { user } = await requireSession();
 

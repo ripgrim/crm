@@ -26,6 +26,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMemo } from "react";
 import { AgentBuilderSidebar } from "@/components/agent-builder/agent-builder-sidebar";
+import { usePrefetchSection } from "@/components/crm/section-prefetch";
 import { useMobileNav } from "@/components/mobile-nav";
 import { useWorkspaceUrl } from "@/lib/use-workspace-url";
 
@@ -65,7 +66,15 @@ function isActive(item: RailItem, pathname: string): boolean {
 	);
 }
 
-function RailLink({ item, active }: { item: RailItem; active: boolean }) {
+function RailLink({
+	item,
+	active,
+	onPrefetch,
+}: {
+	item: RailItem;
+	active: boolean;
+	onPrefetch: () => void;
+}) {
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
@@ -81,6 +90,9 @@ function RailLink({ item, active }: { item: RailItem; active: boolean }) {
 				>
 					<Link
 						href={item.href}
+						prefetch
+						onMouseEnter={onPrefetch}
+						onFocus={onPrefetch}
 						aria-current={active ? "page" : undefined}
 						transitionTypes={["nav-lateral"]}
 					>
@@ -98,10 +110,12 @@ function MobileRailLink({
 	item,
 	active,
 	onNavigate,
+	onPrefetch,
 }: {
 	item: RailItem;
 	active: boolean;
 	onNavigate: () => void;
+	onPrefetch: () => void;
 }) {
 	return (
 		<Button
@@ -115,6 +129,9 @@ function MobileRailLink({
 		>
 			<Link
 				href={item.href}
+				prefetch
+				onMouseEnter={onPrefetch}
+				onFocus={onPrefetch}
 				aria-current={active ? "page" : undefined}
 				onClick={onNavigate}
 				transitionTypes={[
@@ -132,10 +149,12 @@ function MobileRailIconLink({
 	item,
 	active,
 	onNavigate,
+	onPrefetch,
 }: {
 	item: RailItem;
 	active: boolean;
 	onNavigate: () => void;
+	onPrefetch: () => void;
 }) {
 	return (
 		<Button
@@ -150,6 +169,9 @@ function MobileRailIconLink({
 		>
 			<Link
 				href={item.href}
+				prefetch
+				onMouseEnter={onPrefetch}
+				onFocus={onPrefetch}
 				aria-current={active ? "page" : undefined}
 				onClick={onNavigate}
 			>
@@ -160,15 +182,40 @@ function MobileRailIconLink({
 	);
 }
 
+export function AppIconRailFallback() {
+	return (
+		<nav
+			aria-label="Primary"
+			aria-busy="true"
+			className="hidden w-14 shrink-0 flex-col items-center gap-1 border-r py-3 md:flex [view-transition-name:app-rail]"
+		>
+			{ITEMS.map((item) => (
+				<Button
+					key={item.href}
+					variant="ghost"
+					size="icon"
+					disabled
+					className="text-muted-foreground"
+				>
+					<Icon icon={item.icon} />
+					<span className="sr-only">{item.title}</span>
+				</Button>
+			))}
+		</nav>
+	);
+}
+
 export function AppIconRail() {
 	const pathname = usePathname();
 	const workspaceUrl = useWorkspaceUrl();
 	const { open, setOpen } = useMobileNav();
+	const prefetchSection = usePrefetchSection();
 
 	const items = useMemo(
 		() =>
 			ITEMS.map((item) => ({
 				...item,
+				section: item.href,
 				href: workspaceUrl(item.href),
 				related: item.related?.map((path) => workspaceUrl(path)),
 			})),
@@ -189,6 +236,7 @@ export function AppIconRail() {
 						key={item.href}
 						item={item}
 						active={isActive(item, pathname)}
+						onPrefetch={() => prefetchSection(item.section)}
 					/>
 				))}
 			</nav>
@@ -222,6 +270,7 @@ export function AppIconRail() {
 									item={item}
 									active={isActive(item, pathname)}
 									onNavigate={() => setOpen(false)}
+									onPrefetch={() => prefetchSection(item.section)}
 								/>
 							))}
 						</nav>
@@ -245,6 +294,7 @@ export function AppIconRail() {
 									item={item}
 									active={isActive(item, pathname)}
 									onNavigate={() => setOpen(false)}
+									onPrefetch={() => prefetchSection(item.section)}
 								/>
 							))}
 						</nav>

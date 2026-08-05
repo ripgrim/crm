@@ -31,7 +31,7 @@ import {
 import { Spinner } from "@crm/ui/components/spinner";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { parseAsBoolean, useQueryState } from "nuqs";
-import { useId, useState } from "react";
+import { Suspense, useId, useState } from "react";
 import { toast } from "sonner";
 import { dealStageLabel, OPEN_STAGES } from "@/components/crm/deal-stage";
 import { useOpenRecord } from "@/components/crm/record-sheet/record-stack";
@@ -40,7 +40,24 @@ import { useTRPC } from "@/lib/trpc/client";
 
 const UNSET = "";
 
+function AddButton({ disabled }: { disabled?: boolean }) {
+	return (
+		<Button disabled={disabled}>
+			<Icon icon={Add} data-icon="inline-start" />
+			New deal
+		</Button>
+	);
+}
+
 export function CreateDealSheet({ companyId }: { companyId?: string }) {
+	return (
+		<Suspense fallback={<AddButton disabled />}>
+			<CreateDealForm companyId={companyId} />
+		</Suspense>
+	);
+}
+
+function CreateDealForm({ companyId }: { companyId?: string }) {
 	const openRecord = useOpenRecord();
 	const trpc = useTRPC();
 	const cache = useCrmCache();
@@ -87,10 +104,7 @@ export function CreateDealSheet({ companyId }: { companyId?: string }) {
 	return (
 		<Sheet open={open} onOpenChange={(next) => setOpen(next || null)}>
 			<SheetTrigger asChild>
-				<Button>
-					<Icon icon={Add} data-icon="inline-start" />
-					New deal
-				</Button>
+				<AddButton />
 			</SheetTrigger>
 			<SheetContent side="right">
 				<SheetHeader>

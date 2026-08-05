@@ -8,6 +8,8 @@ export const metadata: Metadata = {
 	title: "Set up",
 };
 
+export const instant = false;
+
 export default async function OnboardingPage() {
 	await requireGoogleAccess();
 

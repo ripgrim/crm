@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import type { SearchParams } from "nuqs/server";
+import { Suspense } from "react";
 import {
 	PageShell,
 	PageShellActions,
@@ -7,6 +7,7 @@ import {
 	PageShellDescription,
 	PageShellHeader,
 	PageShellHeading,
+	PageShellLoading,
 	PageShellTitle,
 } from "@/components/page-shell";
 import { requireSession } from "@/lib/session";
@@ -20,22 +21,9 @@ export const metadata: Metadata = {
 	title: "Companies",
 };
 
-export default async function CompaniesPage({
+export default function CompaniesPage({
 	searchParams,
-}: {
-	searchParams: Promise<SearchParams>;
-}) {
-	await requireSession();
-
-	const values = await companiesSearchParams.load(searchParams);
-
-	const trpc = getServerTrpc();
-	const queryClient = getServerQueryClient();
-	await queryClient.prefetchQuery(
-		trpc.companies.list.queryOptions(companiesSearchParams.toInput(values)),
-	);
-	void queryClient.prefetchQuery(trpc.users.list.queryOptions());
-
+}: PageProps<"/[slug]/companies">) {
 	return (
 		<PageShell className="min-h-0">
 			<PageShellHeader>
@@ -51,10 +39,31 @@ export default async function CompaniesPage({
 			</PageShellHeader>
 
 			<PageShellContent className="min-h-0">
-				<HydrateClient>
-					<CompaniesTable />
-				</HydrateClient>
+				<Suspense fallback={<PageShellLoading />}>
+					<Companies searchParams={searchParams} />
+				</Suspense>
 			</PageShellContent>
 		</PageShell>
+	);
+}
+
+async function Companies({
+	searchParams,
+}: Pick<PageProps<"/[slug]/companies">, "searchParams">) {
+	await requireSession();
+
+	const values = await companiesSearchParams.load(searchParams);
+
+	const trpc = getServerTrpc();
+	const queryClient = getServerQueryClient();
+	await queryClient.prefetchQuery(
+		trpc.companies.list.queryOptions(companiesSearchParams.toInput(values)),
+	);
+	void queryClient.prefetchQuery(trpc.users.list.queryOptions());
+
+	return (
+		<HydrateClient>
+			<CompaniesTable />
+		</HydrateClient>
 	);
 }

@@ -1,4 +1,5 @@
-import { SettingsSidebar } from "./settings-sidebar";
+import { Suspense } from "react";
+import { SettingsSidebar, SettingsSidebarFallback } from "./settings-sidebar";
 
 export default function SettingsLayout({
 	children,
@@ -7,7 +8,9 @@ export default function SettingsLayout({
 }>) {
 	return (
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
-			<SettingsSidebar />
+			<Suspense fallback={<SettingsSidebarFallback />}>
+				<SettingsSidebar />
+			</Suspense>
 			{children}
 		</div>
 	);

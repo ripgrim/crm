@@ -1,4 +1,5 @@
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
+import { connection } from "next/server";
 import { API_URL } from "@/lib/env";
 
 function decode(buf: Buffer, encoding: string | null): Buffer {
@@ -12,6 +13,8 @@ function decode(buf: Buffer, encoding: string | null): Buffer {
 }
 
 async function handler(request: Request): Promise<Response> {
+	await connection();
+
 	const url = new URL(request.url);
 	const target = `${API_URL}${url.pathname}${url.search}`;
 

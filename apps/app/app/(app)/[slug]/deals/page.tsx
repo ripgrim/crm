@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import type { SearchParams } from "nuqs/server";
+import { Suspense } from "react";
 import {
 	PageShell,
 	PageShellActions,
@@ -7,6 +7,7 @@ import {
 	PageShellDescription,
 	PageShellHeader,
 	PageShellHeading,
+	PageShellLoading,
 	PageShellTitle,
 } from "@/components/page-shell";
 import { requireSession } from "@/lib/session";
@@ -20,25 +21,9 @@ export const metadata: Metadata = {
 	title: "Deals",
 };
 
-export default async function DealsPage({
+export default function DealsPage({
 	searchParams,
-}: {
-	searchParams: Promise<SearchParams>;
-}) {
-	await requireSession();
-
-	const values = await dealsSearchParams.load(searchParams);
-
-	const trpc = getServerTrpc();
-	const queryClient = getServerQueryClient();
-	await queryClient.prefetchQuery(
-		trpc.deals.list.queryOptions(dealsSearchParams.toInput(values)),
-	);
-	void queryClient.prefetchQuery(trpc.users.list.queryOptions());
-	void queryClient.prefetchQuery(
-		trpc.companies.options.queryOptions({ q: "" }),
-	);
-
+}: PageProps<"/[slug]/deals">) {
 	return (
 		<PageShell className="min-h-0">
 			<PageShellHeader>
@@ -54,10 +39,34 @@ export default async function DealsPage({
 			</PageShellHeader>
 
 			<PageShellContent className="min-h-0">
-				<HydrateClient>
-					<DealsTable />
-				</HydrateClient>
+				<Suspense fallback={<PageShellLoading />}>
+					<Deals searchParams={searchParams} />
+				</Suspense>
 			</PageShellContent>
 		</PageShell>
+	);
+}
+
+async function Deals({
+	searchParams,
+}: Pick<PageProps<"/[slug]/deals">, "searchParams">) {
+	await requireSession();
+
+	const values = await dealsSearchParams.load(searchParams);
+
+	const trpc = getServerTrpc();
+	const queryClient = getServerQueryClient();
+	await queryClient.prefetchQuery(
+		trpc.deals.list.queryOptions(dealsSearchParams.toInput(values)),
+	);
+	void queryClient.prefetchQuery(trpc.users.list.queryOptions());
+	void queryClient.prefetchQuery(
+		trpc.companies.options.queryOptions({ q: "" }),
+	);
+
+	return (
+		<HydrateClient>
+			<DealsTable />
+		</HydrateClient>
 	);
 }

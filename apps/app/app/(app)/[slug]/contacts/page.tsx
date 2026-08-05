@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import type { SearchParams } from "nuqs/server";
+import { Suspense } from "react";
 import {
 	PageShell,
 	PageShellActions,
@@ -7,6 +7,7 @@ import {
 	PageShellDescription,
 	PageShellHeader,
 	PageShellHeading,
+	PageShellLoading,
 	PageShellTitle,
 } from "@/components/page-shell";
 import { requireSession } from "@/lib/session";
@@ -20,11 +21,33 @@ export const metadata: Metadata = {
 	title: "Contacts",
 };
 
-export default async function ContactsPage({
+export default function ContactsPage({
 	searchParams,
-}: {
-	searchParams: Promise<SearchParams>;
-}) {
+}: PageProps<"/[slug]/contacts">) {
+	return (
+		<PageShell className="min-h-0">
+			<PageShellHeader>
+				<PageShellHeading>
+					<PageShellTitle>Contacts</PageShellTitle>
+					<PageShellDescription>Everyone in the pipeline.</PageShellDescription>
+				</PageShellHeading>
+				<PageShellActions>
+					<CreateContactSheet />
+				</PageShellActions>
+			</PageShellHeader>
+
+			<PageShellContent className="min-h-0">
+				<Suspense fallback={<PageShellLoading />}>
+					<Contacts searchParams={searchParams} />
+				</Suspense>
+			</PageShellContent>
+		</PageShell>
+	);
+}
+
+async function Contacts({
+	searchParams,
+}: Pick<PageProps<"/[slug]/contacts">, "searchParams">) {
 	await requireSession();
 
 	const values = await contactsSearchParams.load(searchParams);
@@ -40,22 +63,8 @@ export default async function ContactsPage({
 	);
 
 	return (
-		<PageShell className="min-h-0">
-			<PageShellHeader>
-				<PageShellHeading>
-					<PageShellTitle>Contacts</PageShellTitle>
-					<PageShellDescription>Everyone in the pipeline.</PageShellDescription>
-				</PageShellHeading>
-				<PageShellActions>
-					<CreateContactSheet />
-				</PageShellActions>
-			</PageShellHeader>
-
-			<PageShellContent className="min-h-0">
-				<HydrateClient>
-					<ContactsTable />
-				</HydrateClient>
-			</PageShellContent>
-		</PageShell>
+		<HydrateClient>
+			<ContactsTable />
+		</HydrateClient>
 	);
 }

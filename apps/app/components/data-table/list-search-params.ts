@@ -59,6 +59,7 @@ export type ListSearchParams<TTab extends string, TFacet extends string> = {
 	toInput: (
 		values: ListSearchValues<TTab | TFacet>,
 	) => ListInput<TTab | TFacet>;
+	defaultInput: () => ListInput<TTab | TFacet>;
 };
 
 export function createListSearchParams<
@@ -90,24 +91,31 @@ export function createListSearchParams<
 
 	const keys = [...(tabId ? [tabId] : []), ...facetIds] as (TTab | TFacet)[];
 
+	const defaults = Object.fromEntries(
+		Object.entries(parsers).map(([key, parser]) => [key, parser.defaultValue]),
+	) as ListSearchValues<TTab | TFacet>;
+
+	const toInput = (values: ListSearchValues<TTab | TFacet>) => {
+		const selected: Record<string, string> = {};
+		for (const key of keys) {
+			selected[key] = values[key] ?? "all";
+		}
+
+		return {
+			q: values.q.trim(),
+			sort: values.sort,
+			dir: values.dir,
+			page: values.page > 0 ? values.page : 1,
+			pageSize,
+			...selected,
+		} as ListInput<TTab | TFacet>;
+	};
+
 	return {
 		config: { ...config, defaultSort, defaultDir, pageSize },
 		parsers,
 		load: createLoader(parsers),
-		toInput: (values) => {
-			const selected: Record<string, string> = {};
-			for (const key of keys) {
-				selected[key] = values[key] ?? "all";
-			}
-
-			return {
-				q: values.q.trim(),
-				sort: values.sort,
-				dir: values.dir,
-				page: values.page > 0 ? values.page : 1,
-				pageSize,
-				...selected,
-			} as ListInput<TTab | TFacet>;
-		},
+		toInput,
+		defaultInput: () => toInput(defaults),
 	};
 }

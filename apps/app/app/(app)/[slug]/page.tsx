@@ -1,54 +1,66 @@
-import type { SearchParams } from "nuqs/server";
+import { Suspense } from "react";
 import {
 	PageShell,
 	PageShellActions,
 	PageShellContent,
 	PageShellHeader,
 	PageShellHeading,
+	PageShellLoading,
 } from "@/components/page-shell";
 import { requireSession } from "@/lib/session";
 import { HydrateClient } from "@/lib/trpc/hydrate";
 import { getServerQueryClient, getServerTrpc } from "@/lib/trpc/server";
 import { DashboardSummary } from "./dashboard-summary";
-import { OverviewGreeting } from "./overview-greeting";
-import { OverviewScopeToggle } from "./overview-scope";
+import {
+	OverviewGreeting,
+	OverviewGreetingFallback,
+} from "./overview-greeting";
+import {
+	OverviewScopeToggle,
+	OverviewScopeToggleFallback,
+} from "./overview-scope";
 import { loadOverviewSearchParams } from "./overview-search-params";
 
-export default async function OverviewPage({
-	searchParams,
-}: {
-	searchParams: Promise<SearchParams>;
-}) {
-	await requireSession();
-
-	const { scope } = await loadOverviewSearchParams(searchParams);
-
-	const trpc = getServerTrpc();
-	const queryClient = getServerQueryClient();
-
-	await Promise.all([
-		queryClient.prefetchQuery(trpc.users.me.queryOptions()),
-		queryClient.prefetchQuery(trpc.dashboard.summary.queryOptions({ scope })),
-	]);
-
+export default function OverviewPage({ searchParams }: PageProps<"/[slug]">) {
 	return (
 		<PageShell>
 			<PageShellHeader>
 				<PageShellHeading>
-					<HydrateClient>
+					<Suspense fallback={<OverviewGreetingFallback />}>
 						<OverviewGreeting />
-					</HydrateClient>
+					</Suspense>
 				</PageShellHeading>
 				<PageShellActions>
-					<OverviewScopeToggle />
+					<Suspense fallback={<OverviewScopeToggleFallback />}>
+						<OverviewScopeToggle />
+					</Suspense>
 				</PageShellActions>
 			</PageShellHeader>
 
 			<PageShellContent>
-				<HydrateClient>
-					<DashboardSummary />
-				</HydrateClient>
+				<Suspense fallback={<PageShellLoading />}>
+					<Summary searchParams={searchParams} />
+				</Suspense>
 			</PageShellContent>
 		</PageShell>
+	);
+}
+
+async function Summary({
+	searchParams,
+}: Pick<PageProps<"/[slug]">, "searchParams">) {
+	await requireSession();
+
+	const { scope } = await loadOverviewSearchParams(searchParams);
+
+	const queryClient = getServerQueryClient();
+	await queryClient.prefetchQuery(
+		getServerTrpc().dashboard.summary.queryOptions({ scope }),
+	);
+
+	return (
+		<HydrateClient>
+			<DashboardSummary />
+		</HydrateClient>
 	);
 }

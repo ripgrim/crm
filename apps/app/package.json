@@ -6,6 +6,7 @@
 		"dev": "next dev",
 		"build": "next build",
 		"start": "next start",
+		"typegen": "next typegen",
 		"check-types": "tsc --noEmit",
 		"test": "bun test",
 		"lint": "biome check ."
@@ -23,7 +24,7 @@
 		"api": "workspace:*",
 		"better-auth": "^1.6.25",
 		"eve": "^0.29.4",
-		"next": "16.2.12",
+		"next": "16.3.0",
 		"next-themes": "^0.4.6",
 		"nuqs": "^2.8.9",
 		"react": "19.2.4",

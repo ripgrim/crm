@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
-import type { SearchParams } from "nuqs/server";
+import { Suspense } from "react";
 import {
 	PageShell,
 	PageShellContent,
 	PageShellDescription,
 	PageShellHeader,
 	PageShellHeading,
+	PageShellLoading,
 	PageShellTitle,
 } from "@/components/page-shell";
 import { requireSession } from "@/lib/session";
@@ -18,11 +19,32 @@ export const metadata: Metadata = {
 	title: "Members",
 };
 
-export default async function MembersSettingsPage({
+export default function MembersSettingsPage({
 	searchParams,
-}: {
-	searchParams: Promise<SearchParams>;
-}) {
+}: PageProps<"/[slug]/settings/members">) {
+	return (
+		<PageShell className="min-h-0">
+			<PageShellHeader>
+				<PageShellHeading>
+					<PageShellTitle>Members</PageShellTitle>
+					<PageShellDescription>
+						Everyone who has access to your CRM.
+					</PageShellDescription>
+				</PageShellHeading>
+			</PageShellHeader>
+
+			<PageShellContent className="min-h-0">
+				<Suspense fallback={<PageShellLoading />}>
+					<Members searchParams={searchParams} />
+				</Suspense>
+			</PageShellContent>
+		</PageShell>
+	);
+}
+
+async function Members({
+	searchParams,
+}: Pick<PageProps<"/[slug]/settings/members">, "searchParams">) {
 	await requireSession();
 
 	const values = await membersSearchParams.load(searchParams);
@@ -38,21 +60,8 @@ export default async function MembersSettingsPage({
 	]);
 
 	return (
-		<PageShell className="min-h-0">
-			<PageShellHeader>
-				<PageShellHeading>
-					<PageShellTitle>Members</PageShellTitle>
-					<PageShellDescription>
-						Everyone who has access to your CRM.
-					</PageShellDescription>
-				</PageShellHeading>
-			</PageShellHeader>
-
-			<PageShellContent className="min-h-0">
-				<HydrateClient>
-					<MembersTable />
-				</HydrateClient>
-			</PageShellContent>
-		</PageShell>
+		<HydrateClient>
+			<MembersTable />
+		</HydrateClient>
 	);
 }

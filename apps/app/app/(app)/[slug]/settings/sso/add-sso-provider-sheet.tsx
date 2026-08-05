@@ -28,7 +28,7 @@ import {
 import { Spinner } from "@crm/ui/components/spinner";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { parseAsBoolean, useQueryState } from "nuqs";
-import { useId, useState } from "react";
+import { Suspense, useId, useState } from "react";
 import { toast } from "sonner";
 import { useCrmCache } from "@/lib/trpc/cache";
 import { useTRPC } from "@/lib/trpc/client";
@@ -44,7 +44,24 @@ const EMPTY = {
 	clientSecret: "",
 };
 
+function AddButton({ disabled }: { disabled?: boolean }) {
+	return (
+		<Button disabled={disabled}>
+			<Icon icon={Add} data-icon="inline-start" />
+			Add provider
+		</Button>
+	);
+}
+
 export function AddSsoProviderSheet() {
+	return (
+		<Suspense fallback={<AddButton disabled />}>
+			<AddSsoProviderForm />
+		</Suspense>
+	);
+}
+
+function AddSsoProviderForm() {
 	const trpc = useTRPC();
 	const cache = useCrmCache();
 
@@ -89,10 +106,7 @@ export function AddSsoProviderSheet() {
 	return (
 		<Sheet open={open} onOpenChange={(next) => setOpen(next || null)}>
 			<SheetTrigger asChild>
-				<Button disabled={!settings.data?.canConfigure}>
-					<Icon icon={Add} data-icon="inline-start" />
-					Add provider
-				</Button>
+				<AddButton disabled={!settings.data?.canConfigure} />
 			</SheetTrigger>
 
 			<SheetContent side="right">

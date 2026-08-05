@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
+import { Suspense } from "react";
 import { AuthHeading, AuthShell } from "@/components/auth-shell";
 import { getSession } from "@/lib/session";
 import { getServerQueryClient, getServerTrpc } from "@/lib/trpc/server";
@@ -10,8 +11,6 @@ export const metadata: Metadata = {
 	title: "Sign in",
 };
 
-export const dynamic = "force-dynamic";
-
 type SignInOptions = { google: boolean; providers: SsoProvider[] };
 
 async function signInOptions(): Promise<SignInOptions | null> {
@@ -20,18 +19,35 @@ async function signInOptions(): Promise<SignInOptions | null> {
 			getServerTrpc().sso.signInOptions.queryOptions(),
 		);
 	} catch (error) {
+		unstable_rethrow(error);
 		console.error("Sign-in: could not read the sign-in options.", error);
 		return null;
 	}
 }
 
-export default async function SignInPage({
+export default function SignInPage({ searchParams }: PageProps<"/sign-in">) {
+	return (
+		<AuthShell>
+			<Suspense
+				fallback={
+					<AuthHeading
+						title="Welcome back"
+						description="Sign in with your account to continue."
+					/>
+				}
+			>
+				<SignIn searchParams={searchParams} />
+			</Suspense>
+		</AuthShell>
+	);
+}
+
+async function SignIn({
 	searchParams,
-}: {
-	searchParams: Promise<{ method?: string | string[] }>;
-}) {
+}: Pick<PageProps<"/sign-in">, "searchParams">) {
 	const [session, options, { method }] = await Promise.all([
 		getSession().catch((error: unknown) => {
+			unstable_rethrow(error);
 			console.error("Sign-in: could not read the session.", error);
 			return null;
 		}),
@@ -52,7 +68,7 @@ export default async function SignInPage({
 
 	if (!showSso && !showGoogle) {
 		return (
-			<AuthShell>
+			<>
 				<AuthHeading
 					title="No way in yet"
 					description="This CRM has no sign-in method configured, so nobody can get in — including you."
@@ -63,12 +79,12 @@ export default async function SignInPage({
 					and restart. Your own identity provider can be added from Settings
 					once somebody is signed in.
 				</p>
-			</AuthShell>
+			</>
 		);
 	}
 
 	return (
-		<AuthShell>
+		<>
 			<AuthHeading
 				title="Welcome back"
 				description="Sign in with your account to continue."
@@ -76,6 +92,6 @@ export default async function SignInPage({
 
 			{showSso ? <SsoSignIn providers={providers} /> : null}
 			{showGoogle ? <GoogleSignIn /> : null}
-		</AuthShell>
+		</>
 	);
 }

@@ -170,6 +170,19 @@ describe("proxy", () => {
 		expect(redirectedTo(await proxy(request("/sign-in")))).toBeNull();
 	});
 
+	it("never aims a redirect at the sign-in page itself", async () => {
+		marketing(undefined);
+		setup({ onboarded: false, configured: false });
+
+		expect(redirectedTo(await proxy(request("/sign-in")))).toBeNull();
+		expect(
+			redirectedTo(await proxy(request("/sign-in", [SESSION_COOKIE]))),
+		).toBeNull();
+		expect(
+			redirectedTo(await proxy(request("/sign-in?method=google"))),
+		).toBeNull();
+	});
+
 	it("reads the flag on every request, and only the literal true turns it on", async () => {
 		marketing("false");
 		expect(redirectedTo(await proxy(request("/")))).toBe("/sign-in");

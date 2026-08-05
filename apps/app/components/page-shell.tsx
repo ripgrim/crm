@@ -1,3 +1,4 @@
+import { Spinner } from "@crm/ui/components/spinner";
 import { cn } from "@crm/ui/lib/utils";
 import type * as React from "react";
 import { PageTransition } from "./page-transition";
@@ -120,6 +121,14 @@ function PageShellContent({
 	);
 }
 
+function PageShellLoading() {
+	return (
+		<div aria-busy="true" className="flex justify-center py-12">
+			<Spinner size="lg" />
+		</div>
+	);
+}
+
 export {
 	PageShell,
 	PageShellActions,
@@ -127,5 +136,6 @@ export {
 	PageShellDescription,
 	PageShellHeader,
 	PageShellHeading,
+	PageShellLoading,
 	PageShellTitle,
 };

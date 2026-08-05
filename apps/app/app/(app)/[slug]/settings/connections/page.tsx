@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import {
 	PageShell,
 	PageShellContent,
 	PageShellDescription,
 	PageShellHeader,
 	PageShellHeading,
+	PageShellLoading,
 	PageShellTitle,
 } from "@/components/page-shell";
 import { requireSession } from "@/lib/session";
@@ -16,21 +18,9 @@ export const metadata: Metadata = {
 	title: "Connections",
 };
 
-export default async function ConnectionsSettingsPage({
+export default function ConnectionsSettingsPage({
 	searchParams,
-}: {
-	searchParams: Promise<{ error?: string | string[] }>;
-}) {
-	await requireSession();
-
-	const trpc = getServerTrpc();
-	const queryClient = getServerQueryClient();
-
-	const [{ error }] = await Promise.all([
-		searchParams,
-		queryClient.prefetchQuery(trpc.google.status.queryOptions()),
-	]);
-
+}: PageProps<"/[slug]/settings/connections">) {
 	return (
 		<PageShell>
 			<PageShellHeader>
@@ -43,14 +33,34 @@ export default async function ConnectionsSettingsPage({
 			</PageShellHeader>
 
 			<PageShellContent>
-				<HydrateClient>
-					<div className="flex max-w-3xl flex-col gap-6">
-						<GoogleConnection
-							connectError={Array.isArray(error) ? error[0] : error}
-						/>
-					</div>
-				</HydrateClient>
+				<Suspense fallback={<PageShellLoading />}>
+					<Connections searchParams={searchParams} />
+				</Suspense>
 			</PageShellContent>
 		</PageShell>
+	);
+}
+
+async function Connections({
+	searchParams,
+}: Pick<PageProps<"/[slug]/settings/connections">, "searchParams">) {
+	await requireSession();
+
+	const trpc = getServerTrpc();
+	const queryClient = getServerQueryClient();
+
+	const [{ error }] = await Promise.all([
+		searchParams,
+		queryClient.prefetchQuery(trpc.google.status.queryOptions()),
+	]);
+
+	return (
+		<HydrateClient>
+			<div className="flex max-w-3xl flex-col gap-6">
+				<GoogleConnection
+					connectError={Array.isArray(error) ? error[0] : error}
+				/>
+			</div>
+		</HydrateClient>
 	);
 }

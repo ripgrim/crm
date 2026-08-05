@@ -18,6 +18,14 @@
 				"IS_MARKETING"
 			]
 		},
+		"check-types": {
+			"dependsOn": ["$TURBO_EXTENDS$", "typegen"]
+		},
+		"typegen": {
+			"inputs": ["app/**", "next.config.ts"],
+			"outputs": [".next/types/**", "next-env.d.ts"],
+			"passThroughEnv": ["API_URL", "NEXT_PUBLIC_API_URL"]
+		},
 		"dev": {
 			"cache": false,
 			"persistent": true,

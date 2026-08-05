@@ -17,6 +17,25 @@ function isScope(value: string): value is OverviewScope {
 	return (OVERVIEW_SCOPES as readonly string[]).includes(value);
 }
 
+export function OverviewScopeToggleFallback() {
+	return (
+		<ToggleGroup
+			type="single"
+			variant="outline"
+			size="sm"
+			spacing={0}
+			disabled
+			aria-label="Whose numbers to show"
+		>
+			{OVERVIEW_SCOPES.map((value) => (
+				<ToggleGroupItem key={value} value={value}>
+					{LABELS[value]}
+				</ToggleGroupItem>
+			))}
+		</ToggleGroup>
+	);
+}
+
 export function OverviewScopeToggle() {
 	const [scope, setScope] = useQueryState("scope", overviewParsers.scope);
 

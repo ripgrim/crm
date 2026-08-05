@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import type { SearchParams } from "nuqs/server";
+import { Suspense } from "react";
 import {
 	PageShell,
 	PageShellActions,
@@ -7,6 +7,7 @@ import {
 	PageShellDescription,
 	PageShellHeader,
 	PageShellHeading,
+	PageShellLoading,
 	PageShellTitle,
 } from "@/components/page-shell";
 import { requireSession } from "@/lib/session";
@@ -20,11 +21,37 @@ export const metadata: Metadata = {
 	title: "SSO",
 };
 
-export default async function SsoSettingsPage({
+export default function SsoSettingsPage({
 	searchParams,
-}: {
-	searchParams: Promise<SearchParams>;
-}) {
+}: PageProps<"/[slug]/settings/sso">) {
+	return (
+		<PageShell className="min-h-0">
+			<PageShellHeader>
+				<PageShellHeading>
+					<PageShellTitle>SSO</PageShellTitle>
+					<PageShellDescription>
+						Let your people sign in through your own identity provider. While
+						one is configured, the sign-in page offers it instead of Google.
+					</PageShellDescription>
+				</PageShellHeading>
+
+				<PageShellActions>
+					<AddSsoProviderSheet />
+				</PageShellActions>
+			</PageShellHeader>
+
+			<PageShellContent className="min-h-0">
+				<Suspense fallback={<PageShellLoading />}>
+					<Providers searchParams={searchParams} />
+				</Suspense>
+			</PageShellContent>
+		</PageShell>
+	);
+}
+
+async function Providers({
+	searchParams,
+}: Pick<PageProps<"/[slug]/settings/sso">, "searchParams">) {
 	await requireSession();
 
 	const values = await ssoSearchParams.load(searchParams);
@@ -40,28 +67,8 @@ export default async function SsoSettingsPage({
 	]);
 
 	return (
-		<PageShell className="min-h-0">
-			<PageShellHeader>
-				<PageShellHeading>
-					<PageShellTitle>SSO</PageShellTitle>
-					<PageShellDescription>
-						Let your people sign in through your own identity provider. While
-						one is configured, the sign-in page offers it instead of Google.
-					</PageShellDescription>
-				</PageShellHeading>
-
-				<PageShellActions>
-					<HydrateClient>
-						<AddSsoProviderSheet />
-					</HydrateClient>
-				</PageShellActions>
-			</PageShellHeader>
-
-			<PageShellContent className="min-h-0">
-				<HydrateClient>
-					<SsoTable />
-				</HydrateClient>
-			</PageShellContent>
-		</PageShell>
+		<HydrateClient>
+			<SsoTable />
+		</HydrateClient>
 	);
 }

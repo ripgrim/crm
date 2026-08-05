@@ -7,6 +7,8 @@ export const metadata: Metadata = {
 	title: "Research key",
 };
 
+export const instant = false;
+
 export default async function ResearchKeyPage() {
 	await requireGoogleAccess();
 

@@ -47,12 +47,55 @@ function NavLink({
 		>
 			<Link
 				href={item.href}
+				prefetch
 				aria-current={active ? "page" : undefined}
 				transitionTypes={["nav-lateral"]}
 			>
 				{item.title}
 			</Link>
 		</Button>
+	);
+}
+
+export function SettingsSidebarFallback() {
+	return (
+		<>
+			<aside className="hidden w-56 shrink-0 border-r md:block [view-transition-name:settings-sidebar]">
+				<nav
+					aria-label="Workspace settings"
+					aria-busy="true"
+					className="flex flex-col gap-0.5 p-3"
+				>
+					{ITEMS.map((item) => (
+						<Button
+							key={item.href}
+							variant="ghost"
+							disabled
+							className="w-full justify-start px-3 font-normal text-muted-foreground"
+						>
+							{item.title}
+						</Button>
+					))}
+				</nav>
+			</aside>
+
+			<nav
+				aria-label="Workspace settings"
+				aria-busy="true"
+				className="flex gap-1 overflow-x-auto border-b p-2 md:hidden [view-transition-name:settings-sidebar]"
+			>
+				{ITEMS.map((item) => (
+					<Button
+						key={item.href}
+						variant="ghost"
+						disabled
+						className="shrink-0 justify-start px-3 font-normal text-muted-foreground"
+					>
+						{item.title}
+					</Button>
+				))}
+			</nav>
+		</>
 	);
 }
 

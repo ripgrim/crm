@@ -18,6 +18,7 @@ import {
 } from "@crm/ui/components/dropdown-menu";
 import Logo from "@crm/ui/components/logo";
 import { Separator } from "@crm/ui/components/separator";
+import { Skeleton } from "@crm/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useTheme } from "next-themes";
@@ -90,6 +91,26 @@ export function AppHeader({ user }: { user: User }) {
 						handleSignOut().catch(() => toast.error("Could not sign out."));
 					}}
 				/>
+			</div>
+		</header>
+	);
+}
+
+export function AppHeaderFallback() {
+	return (
+		<header className="flex h-12 shrink-0 items-center gap-2 border-b px-3 [view-transition-name:app-header]">
+			<div className="flex shrink-0 items-center gap-1">
+				<span className="hidden size-8 items-center justify-center text-foreground md:flex">
+					<Logo className="size-5" />
+				</span>
+				<Separator orientation="vertical" className="mx-1 h-5 bg-transparent" />
+				<Skeleton className="h-4 w-24" />
+			</div>
+
+			<div className="ml-auto flex shrink-0 items-center gap-1.5">
+				<Avatar className="size-7">
+					<AvatarFallback />
+				</Avatar>
 			</div>
 		</header>
 	);

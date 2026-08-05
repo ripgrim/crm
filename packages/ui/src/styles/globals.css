@@ -185,6 +185,8 @@
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-ring: var(--sidebar-ring);
 
+	--animate-spinner-trace: spinner-trace 1.4s linear infinite;
+
 	--font-sans: var(--font-sans);
 	--font-mono: var(--font-mono);
 	--radius-sm: 4px;
@@ -336,6 +338,11 @@
 @keyframes cds-spin {
 	to {
 		transform: rotate(360deg);
+	}
+}
+@keyframes spinner-trace {
+	to {
+		stroke-dashoffset: -100;
 	}
 }
 @keyframes cds-wiggle {
