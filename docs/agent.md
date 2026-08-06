@@ -210,6 +210,54 @@ the backend factory** so it cannot be forgotten per session. Costs nothing —
 **Never give the sandbox `DATABASE_URL`.** CRM access is authored tools. A shell with
 credentials and network is exfiltration-shaped; with neither it is a text processor.
 
+## Team-agent builder and runner
+
+`agent_builder` and `agent_runner` are declared subagents with independent
+instructions, tools and deny-all sandboxes. They inherit nothing from the root. The
+root built-in `agent` copy tool is disabled; these two named specialists are the only
+delegation paths for custom agents.
+
+- **Creation requires the current `CREATE_AGENT` turn.** Every builder tool checks the
+  purpose and command type in session auth. A normal builder chat cannot create a
+  draft by prompt alone.
+- **Builder output is typed.** `needs_input` carries one question and its choices for
+  the parent to surface through eve HITL. `draft_ready` carries the immutable version
+  ids. The specialist cannot ask directly because its `ask_question` is disabled.
+- **Empty never means all.** A version chooses `SELECTED` or `WORKSPACE` record scope.
+  Selected scope requires at least one record tagged in that private conversation;
+  workspace scope is an explicit grant and cannot also list selected records.
+- **Connections are executable permissions.** Only `google:gmail` and
+  `google:calendar` are accepted, only when connected, and the runner does not query
+  their synced tables unless the deployed manifest includes that source.
+- **Actions are structured permissions.** `crm.activity.create` separately names
+  `NOTE`, `TASK`, or both. Runtime enforcement never infers a grant from the action's
+  prose summary. Every action is ledgered before execution and keyed by eve's call id
+  for replay safety.
+- **Deployment is the human approval boundary.** Saving produces a private READY
+  version and never deploys it. The review screen shows its trigger, scope, actions,
+  access and exact files. A user's Deploy action pins that immutable version for the
+  team. Scheduled runner sessions use task mode and therefore cannot pause for a
+  per-action approval; the deployed permission and idempotent runtime checks are the
+  boundary.
+- **Approved instructions are system context.** The runner resolves the pinned
+  version instructions at `session.started`, then calls `inspect_run` for the manifest
+  and current run state. Every runner tool also checks the `team-agent` purpose and
+  revalidates scope and action permission.
+- **No generic execution surface.** Both specialists disable shell, file, arbitrary
+  web, todo and direct-question built-ins. CRM access exists only through their small
+  authored tool sets. Tool code runs in the trusted app runtime; the sandbox remains
+  isolated and deny-all.
+
+Runner manifests fail closed when either the explicit record-scope mode or an
+activity type grant is missing. Versions created before these typed permissions were
+introduced must be revised and deployed again before they can run.
+
+`bun run --filter=agent eval` runs the eve end-to-end builder eval against the real
+HTTP channel. It creates an isolated private conversation, dispatches the builder,
+asserts the declared subagent path, verifies a READY side-effect-free manifest, and
+cleans up its rows. It skips visibly when the database, bridge secret or model
+credential is unavailable.
+
 ## The bridge
 
 ```
