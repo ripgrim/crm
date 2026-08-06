@@ -183,6 +183,8 @@ proxy sends the reader to `/sign-in`, which is where they need to be.
   boot — `new URL("/internal/crm/dispatch", base)` throws on `127.0.0.1:2000`,
   and it would throw at the moment a task is queued rather than at startup. See
   [the agent bridge](./agent.md#the-bridge).
+- **`AGENT_PORT`** defaults the self-hosted Eve process to `2000`, matching
+  `AGENT_URL`. A host-provided `PORT` still wins when `AGENT_PORT` is unset.
 
 ## Typed, validated env
 
@@ -382,6 +384,14 @@ Prisma is driven through turbo from the repo root: `db:generate`, `db:migrate`,
 `db:push`, `db:reset`, `db:seed`, `db:studio`, `db:deploy`. Config lives in
 `packages/db/prisma.config.ts`, which loads the root `.env` itself, so the CLI
 works without any app running.
+
+`bun run dev` prepares the local database before starting any service. It
+applies pending migrations, refuses schema drift, generates Prisma Client, and
+then starts dependency-aware watchers. A schema or migration change reruns that
+preparation and restarts the Prisma consumers only after generation completes.
+The preparation step uses the same local-database guard as destructive dev
+commands; `ALLOW_REMOTE_DB=1` is required to opt into a remote development
+database deliberately.
 
 ## What is not an env var
 
