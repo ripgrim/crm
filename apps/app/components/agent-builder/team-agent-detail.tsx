@@ -449,7 +449,10 @@ function AgentOverview({ agent }: { agent: AgentDetail }) {
 			<DetailRow label="Model" value={version?.modelId ?? "—"} />
 			<DetailRow
 				label="Execution"
-				value={textOf(sandbox.summary, "Vercel Sandbox · deny-all network")}
+				value={textOf(
+					sandbox.summary,
+					"Isolated sandbox · deny-all network · bounded CRM tools",
+				)}
 			/>
 			<DetailRow
 				label="Scope"

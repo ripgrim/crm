@@ -4,7 +4,7 @@ import {
 	BUILDER_ARTIFACT_PATHS,
 	writeBuilderArtifact,
 } from "../../../lib/builder-runtime";
-import { requireAttribute } from "../../../lib/session-purpose";
+import { requireBuilderAttribute } from "../../../lib/session-purpose";
 
 export default defineTool({
 	description:
@@ -15,8 +15,8 @@ export default defineTool({
 	}),
 	async execute(input, ctx) {
 		return writeBuilderArtifact(
-			requireAttribute(ctx, "conversationId"),
-			requireAttribute(ctx, "userId"),
+			requireBuilderAttribute(ctx, "conversationId"),
+			requireBuilderAttribute(ctx, "userId"),
 			input.path,
 			input.content,
 		);

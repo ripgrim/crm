@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { builderContext } from "../../../lib/builder-runtime";
-import { requireAttribute } from "../../../lib/session-purpose";
+import { requireBuilderAttribute } from "../../../lib/session-purpose";
 
 export default defineTool({
 	description:
@@ -9,8 +9,8 @@ export default defineTool({
 	inputSchema: z.object({}),
 	async execute(_input, ctx) {
 		return builderContext(
-			requireAttribute(ctx, "conversationId"),
-			requireAttribute(ctx, "userId"),
+			requireBuilderAttribute(ctx, "conversationId"),
+			requireBuilderAttribute(ctx, "userId"),
 		);
 	},
 });

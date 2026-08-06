@@ -119,6 +119,7 @@ describe("builder persistence", () => {
 				name: "Manual",
 				summary: "Run when a rep requests meeting preparation.",
 			},
+			recordScope: "WORKSPACE" as const,
 			resources: [],
 			actions: [
 				{
@@ -155,6 +156,55 @@ describe("builder persistence", () => {
 		});
 	});
 
+	it("fails closed on unsupported integrations and ambiguous record scope", async () => {
+		const conversation = await db.agentConversation.create({
+			data: { kind: "BUILDER", userId },
+			select: { id: true },
+		});
+		conversationIds.push(conversation.id);
+		const base = {
+			name: "Safe scope",
+			description: "Keep a bounded CRM summary.",
+			instructions:
+				"When manually triggered, read only the approved CRM scope and return a concise summary without changing CRM records.",
+			trigger: {
+				type: "MANUAL" as const,
+				name: "Manual",
+				summary: "Run only when a teammate requests it.",
+			},
+			actions: [
+				{
+					type: "run.summary" as const,
+					provider: "crm" as const,
+					summary: "Return a run summary.",
+				},
+			],
+			access: ["Read approved CRM records"],
+		};
+
+		const unsupported = await saveBuilderDraft(conversation.id, userId, {
+			...base,
+			recordScope: "WORKSPACE",
+			resources: [
+				{ kind: "integration", id: "google:drive", label: "Google Drive" },
+			],
+		});
+		expect(unsupported).toMatchObject({
+			saved: false,
+			issues: ["Google Drive is not an available integration."],
+		});
+
+		const ambiguous = await saveBuilderDraft(conversation.id, userId, {
+			...base,
+			recordScope: "SELECTED",
+			resources: [],
+		});
+		expect(ambiguous).toMatchObject({
+			saved: false,
+			issues: ["Selected CRM scope needs at least one tagged record."],
+		});
+	});
+
 	it("keeps a live definition unchanged until a revised version is deployed", async () => {
 		const conversation = await db.agentConversation.create({
 			data: { kind: "BUILDER", userId },
@@ -172,6 +222,7 @@ describe("builder persistence", () => {
 				name: "Manual",
 				summary: "Run when a teammate requests a workspace pulse.",
 			},
+			recordScope: "WORKSPACE" as const,
 			resources: [],
 			actions: [
 				{

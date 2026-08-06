@@ -1018,12 +1018,14 @@ function ReviewAgentCard({
 				<ReviewRow label="Action" value={manifest.action} />
 				<ReviewRow label="Access" value={manifest.access} />
 				<p className="border-t px-4 py-2 text-pretty text-muted-foreground text-xs sm:px-5">
-					Runs in an isolated Vercel Sandbox. Integration credentials are
-					brokered at runtime and never enter the workspace.
+					The sandbox has no network access. CRM and connected data are
+					available only through the listed tools, and credentials stay in the
+					app runtime.
 				</p>
 				<div className="flex min-h-14 flex-col items-stretch gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5">
 					<p className="text-pretty text-muted-foreground text-xs">
-						Deploying makes this agent available to the whole team.
+						Deploying approves this version, scope, and its listed actions for
+						the whole team.
 					</p>
 					<div className="flex flex-wrap justify-end gap-1 sm:shrink-0">
 						<Button
@@ -1165,8 +1167,15 @@ function DeployedAgentCard({
 							)
 						}
 					/>
-					<DeployedStat label="Execution" value="Vercel · Eve · Sandbox" />
-					<DeployedStat label="Available to" value="Everyone in Comp AI" last />
+					<DeployedStat
+						label="Execution"
+						value="Eve runtime · isolated sandbox"
+					/>
+					<DeployedStat
+						label="Available to"
+						value="Everyone on the team"
+						last
+					/>
 				</div>
 				<div className="flex min-h-12 flex-col items-start gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-5 sm:py-2">
 					<p className="text-pretty text-muted-foreground text-xs">

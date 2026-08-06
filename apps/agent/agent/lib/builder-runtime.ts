@@ -19,17 +19,25 @@ export type DraftTrigger = {
 	intervalMinutes?: number | null;
 };
 
-export type DraftAction = {
-	type: "crm.activity.create" | "run.summary";
-	provider: "crm";
-	summary: string;
-};
+export type DraftAction =
+	| {
+			type: "crm.activity.create";
+			provider: "crm";
+			summary: string;
+			activityTypes: ("NOTE" | "TASK")[];
+	  }
+	| {
+			type: "run.summary";
+			provider: "crm";
+			summary: string;
+	  };
 
 export type DraftAgentInput = {
 	name: string;
 	description: string;
 	instructions: string;
 	trigger: DraftTrigger;
+	recordScope: "SELECTED" | "WORKSPACE";
 	resources: BuilderResource[];
 	actions: DraftAction[];
 	access: string[];
@@ -157,13 +165,21 @@ export async function saveBuilderDraft(
 ) {
 	const conversation = await db.agentConversation.findFirst({
 		where: { id: conversationId, userId, kind: "BUILDER" },
-		select: { id: true },
+		select: {
+			id: true,
+			submissions: { select: { message: true } },
+		},
 	});
 
 	if (!conversation)
 		throw new Error("This builder conversation is unavailable.");
 
-	const validation = await validateDraft(userId, input);
+	const taggedResources = uniqueResources(
+		conversation.submissions.flatMap((submission) =>
+			resourcesOf(submission.message),
+		),
+	);
+	const validation = await validateDraft(userId, input, taggedResources);
 	if (!validation.valid) {
 		return {
 			saved: false as const,
@@ -192,16 +208,18 @@ export async function saveBuilderDraft(
 					: {},
 		},
 		dataScope: {
-			summary: scopeSummary(input.resources),
+			mode: input.recordScope,
+			summary: scopeSummary(input.recordScope, input.resources),
 			resources: input.resources,
 		},
 		actions: input.actions,
 		access: input.access,
 	};
 	const sandboxPolicy = {
-		backend: "vercel-sandbox",
+		backend: "eve-default",
 		networkPolicy: "deny-all",
 		credentials: "app-runtime-only",
+		summary: "Isolated sandbox · deny-all network · bounded CRM tools",
 	};
 	const files = artifactFiles(input, manifest);
 	for (const file of files) assertSafeArtifact(file.content);
@@ -415,12 +433,44 @@ async function persistArtifactSnapshots(
 	}
 }
 
-async function validateDraft(userId: string, input: DraftAgentInput) {
+async function validateDraft(
+	userId: string,
+	input: DraftAgentInput,
+	taggedResources: BuilderResource[],
+) {
 	const connections = await connectionStatus(userId);
 	const issues: string[] = [];
-	const capabilities = new Set(["crm.read", "crm.activity.create"]);
+	const capabilities = new Set(["crm.read"]);
+	const resourceKeys = new Set<string>();
+	const recordResources = input.resources.filter(
+		(resource) => resource.kind !== "integration",
+	);
+
+	if (input.recordScope === "SELECTED" && recordResources.length === 0) {
+		issues.push("Selected CRM scope needs at least one tagged record.");
+	}
+	if (input.recordScope === "WORKSPACE" && recordResources.length > 0) {
+		issues.push("Workspace CRM scope cannot also list selected records.");
+	}
+	const taggedRecordKeys = new Set(
+		taggedResources
+			.filter((resource) => resource.kind !== "integration")
+			.map((resource) => `${resource.kind}:${resource.id}`),
+	);
+	for (const resource of recordResources) {
+		if (!taggedRecordKeys.has(`${resource.kind}:${resource.id}`)) {
+			issues.push(`${resource.label} was not tagged in this builder chat.`);
+		}
+	}
 
 	for (const resource of input.resources) {
+		const key = `${resource.kind}:${resource.id}`;
+		if (resourceKeys.has(key)) {
+			issues.push(`${resource.label} is listed more than once.`);
+			continue;
+		}
+		resourceKeys.add(key);
+
 		if (resource.kind !== "integration") continue;
 		if (resource.id === "google:gmail" && !connections.gmail) {
 			issues.push("Gmail is not connected for the chat owner.");
@@ -428,10 +478,19 @@ async function validateDraft(userId: string, input: DraftAgentInput) {
 		if (resource.id === "google:calendar" && !connections.calendar) {
 			issues.push("Google Calendar is not connected for the chat owner.");
 		}
-		if (!resource.id.startsWith("google:")) {
+		if (!["google:gmail", "google:calendar"].includes(resource.id)) {
 			issues.push(`${resource.label} is not an available integration.`);
+			continue;
 		}
 		capabilities.add(`${resource.id}.read`);
+	}
+
+	for (const action of input.actions) {
+		capabilities.add(action.type);
+		if (action.type !== "crm.activity.create") continue;
+		if (new Set(action.activityTypes).size !== action.activityTypes.length) {
+			issues.push("CRM activity permissions must not repeat an activity type.");
+		}
 	}
 
 	const missingRecords = await missingResourceIds(input.resources);
@@ -609,8 +668,13 @@ function assertSafeArtifact(content: string): void {
 	}
 }
 
-function scopeSummary(resources: BuilderResource[]): string {
-	if (resources.length === 0)
-		return "Workspace CRM records required by the run";
-	return resources.map((resource) => resource.label).join(" · ");
+function scopeSummary(
+	recordScope: DraftAgentInput["recordScope"],
+	resources: BuilderResource[],
+): string {
+	const records = resources.filter(
+		(resource) => resource.kind !== "integration",
+	);
+	if (recordScope === "WORKSPACE") return "Workspace CRM records";
+	return records.map((resource) => resource.label).join(" · ");
 }
