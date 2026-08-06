@@ -61,6 +61,7 @@ beforeAll(async () => {
 			instructions: "Create one approved CRM activity.",
 			manifest: {
 				dataScope: {
+					mode: "SELECTED",
 					resources: [
 						{
 							kind: "company",
@@ -69,7 +70,7 @@ beforeAll(async () => {
 						},
 					],
 				},
-				actions: [{ type: "crm.activity.create" }],
+				actions: [{ type: "crm.activity.create", activityTypes: ["NOTE"] }],
 			},
 			modelId: "test/model",
 			sandboxPolicy: {},
@@ -522,6 +523,25 @@ describe("durable custom-agent runtime", () => {
 		expect(
 			await db.agentAction.count({
 				where: { idempotencyKey: `${run.id}:out-of-scope` },
+			}),
+		).toBe(0);
+
+		let activityTypeError: Error | null = null;
+		try {
+			await createRunActivity(run.id, "unapproved-task", {
+				...input,
+				type: "TASK",
+				subject: "This type was not approved",
+			});
+		} catch (error) {
+			activityTypeError = error as Error;
+		}
+		expect(activityTypeError?.message).toContain(
+			"does not allow CRM task activities",
+		);
+		expect(
+			await db.agentAction.count({
+				where: { idempotencyKey: `${run.id}:unapproved-task` },
 			}),
 		).toBe(0);
 	});

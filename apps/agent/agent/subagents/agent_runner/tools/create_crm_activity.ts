@@ -1,11 +1,11 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { createRunActivity } from "../../../lib/run-runtime";
-import { requireAttribute } from "../../../lib/session-purpose";
+import { requireTeamAgentAttribute } from "../../../lib/session-purpose";
 
 export default defineTool({
 	description:
-		"Create an internal CRM note or task on an approved record. The action is logged before it executes and is idempotent across retries.",
+		"Create an approved internal CRM note or task on an approved record. The version must allow the exact activity type. The action is logged before it executes and is idempotent across retries.",
 	inputSchema: z.object({
 		type: z.enum(["NOTE", "TASK"]),
 		targetKind: z.enum(["company", "contact", "deal"]),
@@ -15,6 +15,10 @@ export default defineTool({
 		dueAt: z.string().nullish(),
 	}),
 	async execute(input, ctx) {
-		return createRunActivity(requireAttribute(ctx, "runId"), ctx.callId, input);
+		return createRunActivity(
+			requireTeamAgentAttribute(ctx, "runId"),
+			ctx.callId,
+			input,
+		);
 	},
 });

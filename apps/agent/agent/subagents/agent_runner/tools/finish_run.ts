@@ -1,7 +1,7 @@
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 import { finishRun } from "../../../lib/run-runtime";
-import { requireAttribute } from "../../../lib/session-purpose";
+import { requireTeamAgentAttribute } from "../../../lib/session-purpose";
 
 export default defineTool({
 	description:
@@ -11,6 +11,6 @@ export default defineTool({
 		result: z.record(z.string(), z.unknown()).nullish(),
 	}),
 	async execute(input, ctx) {
-		return finishRun(requireAttribute(ctx, "runId"), input);
+		return finishRun(requireTeamAgentAttribute(ctx, "runId"), input);
 	},
 });

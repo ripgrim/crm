@@ -7,17 +7,26 @@ import {
 	runIdFromToken,
 	runToken,
 } from "../agent/lib/custom-agent-dispatch";
+import { allowedHistorySources } from "../agent/lib/run-runtime";
 import {
 	assertResearchPurpose,
 	attribute,
 	purposeOf,
+	requireBuilderAttribute,
+	requireTeamAgentAttribute,
 } from "../agent/lib/session-purpose";
 
-const context = (purpose?: string) => ({
+const context = (purpose?: string, commandType?: string) => ({
 	session: {
 		auth: {
 			current: purpose
-				? { attributes: { purpose, conversationId: "chat-1" } }
+				? {
+						attributes: {
+							purpose,
+							conversationId: "chat-1",
+							commandType,
+						},
+					}
 				: { attributes: {} },
 			initiator: { attributes: { userId: "user-1" } },
 		},
@@ -92,6 +101,35 @@ describe("session purpose boundaries", () => {
 	it("rejects research writes from builder and team-agent sessions", () => {
 		expect(() => assertResearchPurpose(context("builder"))).toThrow();
 		expect(() => assertResearchPurpose(context("team-agent"))).toThrow();
+	});
+
+	it("binds specialist tools to their explicit session purpose", () => {
+		expect(
+			requireBuilderAttribute(
+				context("builder", "CREATE_AGENT"),
+				"conversationId",
+			),
+		).toBe("chat-1");
+		expect(() =>
+			requireBuilderAttribute(context("builder", "CHAT"), "conversationId"),
+		).toThrow();
+		expect(() =>
+			requireTeamAgentAttribute(context("builder"), "runId"),
+		).toThrow();
+	});
+});
+
+describe("deployed agent data sources", () => {
+	it("enables only integrations stored in the approved manifest", () => {
+		expect(allowedHistorySources([])).toEqual({
+			gmail: false,
+			calendar: false,
+		});
+		expect(
+			allowedHistorySources([
+				{ kind: "integration", id: "google:gmail", label: "Gmail" },
+			]),
+		).toEqual({ gmail: true, calendar: false });
 	});
 });
 

@@ -1,7 +1,8 @@
 import { db } from "@crm/db";
 import { DEFAULT_AGENT_MODEL } from "@crm/db/settings";
 import { defineAgent, defineDynamic } from "eve";
-import { attribute } from "../../lib/session-purpose";
+import { z } from "zod";
+import { attribute, purposeOf } from "../../lib/session-purpose";
 
 export default defineAgent({
 	description:
@@ -10,6 +11,7 @@ export default defineAgent({
 		fallback: DEFAULT_AGENT_MODEL.id,
 		events: {
 			"session.started": async (_event, ctx) => {
+				if (purposeOf(ctx) !== "team-agent") return null;
 				const runId = attribute(ctx, "runId");
 				if (!runId) return null;
 
@@ -20,6 +22,10 @@ export default defineAgent({
 				return run?.version.modelId ?? null;
 			},
 		},
+	}),
+	outputSchema: z.object({
+		summary: z.string().min(1).max(1000),
+		result: z.record(z.string(), z.unknown()).nullable(),
 	}),
 	limits: {
 		maxInputTokensPerSession: 500_000,

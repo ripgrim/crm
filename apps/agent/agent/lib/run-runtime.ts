@@ -14,6 +14,24 @@ type RunResource = {
 	label: string;
 };
 
+type RunRecordScope = "SELECTED" | "WORKSPACE";
+
+export async function approvedRunInstructions(runId: string): Promise<string> {
+	const run = await db.agentRun.findUnique({
+		where: { id: runId },
+		select: {
+			status: true,
+			version: { select: { instructions: true } },
+		},
+	});
+
+	if (!run) throw new Error("This agent run is unavailable.");
+	if (run.status !== "RUNNING") {
+		throw new Error("This agent run is not active.");
+	}
+	return run.version.instructions;
+}
+
 export async function runContext(runId: string) {
 	const run = await db.agentRun.findUnique({
 		where: { id: runId },
@@ -27,7 +45,6 @@ export async function runContext(runId: string) {
 				select: {
 					id: true,
 					number: true,
-					instructions: true,
 					manifest: true,
 					modelId: true,
 					sandboxPolicy: true,
@@ -42,9 +59,11 @@ export async function runContext(runId: string) {
 		throw new Error("This agent run is not active.");
 	}
 
+	const dataScope = manifestDataScope(run.version.manifest);
 	return {
 		...run,
-		allowedResources: manifestResources(run.version.manifest),
+		recordScope: dataScope.mode,
+		allowedResources: dataScope.resources,
 		allowedActions: manifestActions(run.version.manifest),
 		now: new Date().toISOString(),
 	};
@@ -63,17 +82,24 @@ export async function queryRunCrm(
 		(resource) => resource.kind !== "integration",
 	);
 	const result = await searchCrm(input.query, input);
-	if (scoped.length === 0) return result;
+	if (run.recordScope === "WORKSPACE") return result;
 
-	const allowed = new Set(scoped.map((resource) => resource.id));
+	const allowed = new Set(
+		scoped.map((resource) => `${resource.kind}:${resource.id}`),
+	);
+	const contacts = result.contacts.filter((row) =>
+		allowed.has(`contact:${row.id}`),
+	);
+	const companies = result.companies.filter((row) =>
+		allowed.has(`company:${row.id}`),
+	);
+	const deals = result.deals.filter((row) => allowed.has(`deal:${row.id}`));
 	return {
 		...result,
-		contacts: result.contacts.filter((row) => allowed.has(row.id)),
-		companies: result.companies.filter((row) => allowed.has(row.id)),
-		deals: result.deals.filter((row) => allowed.has(row.id)),
-		total: [...result.contacts, ...result.companies, ...result.deals].filter(
-			(row) => allowed.has(row.id),
-		).length,
+		contacts,
+		companies,
+		deals,
+		total: contacts.length + companies.length + deals.length,
 	};
 }
 
@@ -85,14 +111,28 @@ export async function readRunRecord(
 	},
 ) {
 	const run = await runContext(runId);
-	assertResourceAllowed(run.allowedResources, input);
+	assertResourceAllowed(run.recordScope, run.allowedResources, input);
+	const sources = allowedHistorySources(run.allowedResources);
 
 	if (input.kind === "contact")
-		return readCrmHistory(input.id, { threads: 10 });
+		return readCrmHistory(input.id, {
+			threads: 10,
+			includeEmail: sources.gmail,
+			includeCalendar: sources.calendar,
+		});
 	if (input.kind === "company") {
-		return readCompanyHistory(input.id, { threads: 10, people: 50 });
+		return readCompanyHistory(input.id, {
+			threads: 10,
+			people: 50,
+			includeEmail: sources.gmail,
+			includeCalendar: sources.calendar,
+		});
 	}
-	return readDealHistory(input.id, { threads: 10 });
+	return readDealHistory(input.id, {
+		threads: 10,
+		includeEmail: sources.gmail,
+		includeCalendar: sources.calendar,
+	});
 }
 
 export async function createRunActivity(
@@ -120,8 +160,9 @@ export async function createRunActivity(
 	});
 	if (!run) throw new Error("This agent run is unavailable.");
 
-	assertActionAllowed(run.version.manifest, "crm.activity.create");
-	assertResourceAllowed(manifestResources(run.version.manifest), {
+	assertActivityAllowed(run.version.manifest, input.type);
+	const dataScope = manifestDataScope(run.version.manifest);
+	assertResourceAllowed(dataScope.mode, dataScope.resources, {
 		kind: input.targetKind,
 		id: input.targetId,
 	});
@@ -150,6 +191,9 @@ export async function createRunActivity(
 	}
 	if (input.type === "TASK" && !input.subject?.trim()) {
 		throw new Error("A CRM task needs a subject.");
+	}
+	if (input.type === "NOTE" && !input.subject?.trim() && !input.body?.trim()) {
+		throw new Error("A CRM note needs a subject or body.");
 	}
 	const dueAt = input.dueAt ? new Date(input.dueAt) : null;
 	if (dueAt && Number.isNaN(dueAt.getTime())) {
@@ -378,12 +422,20 @@ export async function finishRun(
 	});
 }
 
-function manifestResources(value: unknown): RunResource[] {
+function manifestDataScope(value: unknown): {
+	mode: RunRecordScope;
+	resources: RunResource[];
+} {
 	const manifest = recordOf(value);
 	const scope = recordOf(manifest.dataScope);
-	if (!Array.isArray(scope.resources)) return [];
+	if (scope.mode !== "SELECTED" && scope.mode !== "WORKSPACE") {
+		throw new Error("Agent version has no valid CRM record scope.");
+	}
+	if (!Array.isArray(scope.resources)) {
+		throw new Error("Agent version has no valid CRM resources.");
+	}
 
-	return scope.resources.flatMap((resource) => {
+	const resources = scope.resources.flatMap((resource) => {
 		if (!resource || typeof resource !== "object") return [];
 		const row = resource as Record<string, unknown>;
 		if (
@@ -397,6 +449,16 @@ function manifestResources(value: unknown): RunResource[] {
 		}
 		return [resource as RunResource];
 	});
+	const records = resources.filter(
+		(resource) => resource.kind !== "integration",
+	);
+	if (scope.mode === "SELECTED" && records.length === 0) {
+		throw new Error("Agent version selected no CRM records.");
+	}
+	if (scope.mode === "WORKSPACE" && records.length > 0) {
+		throw new Error("Agent version mixes workspace and selected CRM scope.");
+	}
+	return { mode: scope.mode, resources };
 }
 
 function manifestActions(value: unknown) {
@@ -404,20 +466,32 @@ function manifestActions(value: unknown) {
 	return Array.isArray(actions) ? actions.map(recordOf) : [];
 }
 
-function assertActionAllowed(manifest: unknown, type: string) {
-	if (!manifestActions(manifest).some((action) => action.type === type)) {
-		throw new Error(`Agent version does not allow ${type}.`);
+function assertActivityAllowed(
+	manifest: unknown,
+	activityType: "NOTE" | "TASK",
+) {
+	const allowed = manifestActions(manifest).some(
+		(action) =>
+			action.type === "crm.activity.create" &&
+			Array.isArray(action.activityTypes) &&
+			action.activityTypes.includes(activityType),
+	);
+	if (!allowed) {
+		throw new Error(
+			`Agent version does not allow CRM ${activityType.toLowerCase()} activities.`,
+		);
 	}
 }
 
 function assertResourceAllowed(
+	mode: RunRecordScope,
 	resources: RunResource[],
 	input: { kind: "contact" | "company" | "deal"; id: string },
 ) {
+	if (mode === "WORKSPACE") return;
 	const records = resources.filter(
 		(resource) => resource.kind !== "integration",
 	);
-	if (records.length === 0) return;
 	if (
 		records.some(
 			(resource) => resource.kind === input.kind && resource.id === input.id,
@@ -428,6 +502,21 @@ function assertResourceAllowed(
 	throw new Error(
 		"That CRM record is outside this agent version's approved scope.",
 	);
+}
+
+export function allowedHistorySources(resources: RunResource[]): {
+	gmail: boolean;
+	calendar: boolean;
+} {
+	const integrations = new Set(
+		resources
+			.filter((resource) => resource.kind === "integration")
+			.map((resource) => resource.id),
+	);
+	return {
+		gmail: integrations.has("google:gmail"),
+		calendar: integrations.has("google:calendar"),
+	};
 }
 
 async function targetRecord(kind: "company" | "contact" | "deal", id: string) {
