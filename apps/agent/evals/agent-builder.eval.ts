@@ -4,7 +4,7 @@ import { equals, satisfies } from "eve/evals/expect";
 
 export default defineEval({
 	description:
-		"Build a fully specified, review-only team agent through the durable CRM channel.",
+		"Turn a short outcome request into a safe, review-only team agent through the durable CRM channel.",
 	tags: ["builder", "integration"],
 	timeoutMs: 180_000,
 	async test(t) {
@@ -43,7 +43,7 @@ export default defineEval({
 							clientRequestId: crypto.randomUUID(),
 							commandType: "CREATE_AGENT",
 							message: {
-								text: "Create a manually run agent named Account Snapshot. It may read workspace CRM records and must return a concise run summary only. It must not create notes, tasks, emails, calendar events, or any other side effect.",
+								text: "Build me an agent that gives me a snapshot of our CRM accounts.",
 								resources: [],
 							},
 						},

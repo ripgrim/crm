@@ -1,9 +1,14 @@
 export type BuilderCommandType = "CHAT" | "CREATE_AGENT";
 
 const CREATE_AGENT = /^\/create(?:\s+agent|-agent)(?:\s|$)/i;
+const CREATE_AGENT_REQUEST =
+	/^(?:(?:i\s+(?:need|want)\s+(?:you\s+to\s+)?)|please\s+)?(?:create|build|draft|make|configure|set\s+up)(?:\s+me)?\s+(?:(?:and\s+save)\s+)?(?:(?:a|an|the|this)\s+)?(?:new\s+)?agent\b/i;
 
 export function builderCommandType(message: string): BuilderCommandType {
-	return CREATE_AGENT.test(message.trimStart()) ? "CREATE_AGENT" : "CHAT";
+	const trimmed = message.trimStart();
+	return CREATE_AGENT.test(trimmed) || CREATE_AGENT_REQUEST.test(trimmed)
+		? "CREATE_AGENT"
+		: "CHAT";
 }
 
 export function consumeBuilderCommand(

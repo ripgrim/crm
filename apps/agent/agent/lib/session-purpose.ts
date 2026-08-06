@@ -44,7 +44,7 @@ export function requireBuilderAttribute(
 		attribute(ctx, "commandType") !== "CREATE_AGENT"
 	) {
 		throw new Error(
-			"Agent creation requires the current builder turn's Create agent command.",
+			"Agent creation requires an explicit request to create or build an agent.",
 		);
 	}
 	return requireAttribute(ctx, key);

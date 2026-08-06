@@ -51,8 +51,8 @@ export function AgentBuilderHome({ name }: { name: string }) {
 					What can I help with, {firstName(name)}?
 				</h1>
 				<p className="max-w-xl text-balance text-muted-foreground text-sm">
-					Ask about your CRM, tag a record or integration, or use /Create agent
-					to automate a task.
+					Ask about your CRM, tag a record or integration, or describe an agent
+					to build to automate a task.
 				</p>
 			</div>
 

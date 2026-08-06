@@ -8,7 +8,7 @@ import {
 } from "@crm/ui/components/accordion";
 import { Shimmer } from "@crm/ui/components/shimmer";
 import { cn } from "@crm/ui/lib/utils";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 
 export function Reasoning({
 	children,
@@ -21,11 +21,14 @@ export function Reasoning({
 	isStreaming?: boolean;
 	label?: string;
 }) {
+	const [value, setValue] = useState("");
+
 	return (
 		<Accordion
 			type="single"
 			collapsible
-			defaultValue={isStreaming ? "reasoning" : undefined}
+			value={isStreaming ? "reasoning" : value}
+			onValueChange={setValue}
 			className={cn(className)}
 		>
 			<AccordionItem value="reasoning">

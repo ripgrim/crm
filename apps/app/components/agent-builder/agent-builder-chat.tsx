@@ -24,9 +24,10 @@ import { Icon } from "@crm/ui/components/icon";
 import { Markdown } from "@crm/ui/components/markdown";
 import { Reasoning } from "@crm/ui/components/reasoning";
 import { Skeleton } from "@crm/ui/components/skeleton";
+import { useMountEffect } from "@crm/ui/hooks/use-mount-effect";
 import { cn } from "@crm/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { MessageStreamEvent } from "eve/client";
+import { Client, type MessageStreamEvent } from "eve/client";
 import type { EveMessage, EveMessageInputRequest } from "eve/react";
 import Link from "next/link";
 import { type ReactNode, useState } from "react";
@@ -101,6 +102,10 @@ export function AgentBuilderChat({
 	const trpc = useTRPC();
 	const queryClient = useQueryClient();
 	const sharedChat = isSharedChatToken(conversationId);
+	const [liveStream, setLiveStream] = useState<{
+		key: string;
+		events: readonly MessageStreamEvent[];
+	} | null>(null);
 	const conversation = useQuery({
 		...trpc.conversations.builderById.queryOptions({ id: conversationId }),
 		enabled: !sharedChat,
@@ -190,10 +195,18 @@ export function AgentBuilderChat({
 	const submissions = data.submissions as BuilderSubmission[];
 	const persistedEvents = (events.data ??
 		[]) as unknown as MessageStreamEvent[];
-	const agentMessages = messagesFromEvents(persistedEvents);
+	const streamKey =
+		data.sessionId && builderConversationIsWorking(data)
+			? `${data.sessionId}:${submissions.at(-1)?.id ?? "initial"}`
+			: null;
+	const transcriptEvents =
+		streamKey && liveStream?.key === streamKey
+			? liveStream.events
+			: persistedEvents;
+	const agentMessages = messagesFromEvents(transcriptEvents);
 	const timeline = conversationTimeline(
 		submissions,
-		persistedEvents,
+		transcriptEvents,
 		agentMessages,
 	);
 	const answeredQuestionIds = questionResponseIds(submissions);
@@ -203,7 +216,7 @@ export function AgentBuilderChat({
 		!hasQueuedQuestionResponse(submissions, waitingQuestion.requestId)
 			? waitingQuestion
 			: null;
-	const failure = latestTurnFailure(persistedEvents);
+	const failure = latestTurnFailure(transcriptEvents);
 	const creatingAgent = hasCreateAgentCommand(submissions);
 	const working = builderConversationIsWorking(data) && !failure;
 	const reviewVersion = reviewVersionId(data);
@@ -234,6 +247,25 @@ export function AgentBuilderChat({
 				}
 			}}
 		>
+			{streamKey && data.sessionId ? (
+				<BuilderEventFollower
+					key={streamKey}
+					conversationId={conversationId}
+					sessionId={data.sessionId}
+					onSnapshot={(snapshot) =>
+						setLiveStream({ key: streamKey, events: snapshot })
+					}
+					onEvent={(event) =>
+						setLiveStream((current) => ({
+							key: streamKey,
+							events:
+								current?.key === streamKey
+									? appendEvent(current.events, event)
+									: [event],
+						}))
+					}
+				/>
+			) : null}
 			<ChatHeader
 				conversation={data}
 				working={working}
@@ -341,6 +373,59 @@ export function AgentBuilderChat({
 			</div>
 		</main>
 	);
+}
+
+function BuilderEventFollower({
+	conversationId,
+	sessionId,
+	onSnapshot,
+	onEvent,
+}: {
+	conversationId: string;
+	sessionId: string;
+	onSnapshot: (events: readonly MessageStreamEvent[]) => void;
+	onEvent: (event: MessageStreamEvent) => void;
+}) {
+	useMountEffect(() => {
+		const controller = new AbortController();
+		const session = new Client({
+			headers: { "x-crm-builder-conversation": conversationId },
+			host: "",
+		}).session({ sessionId, streamIndex: 0 });
+
+		const follow = async () => {
+			const snapshot = await session.snapshot({ signal: controller.signal });
+			if (controller.signal.aborted) return;
+			onSnapshot(snapshot.events);
+
+			for await (const event of session.stream({
+				startIndex: snapshot.session.streamIndex,
+				signal: controller.signal,
+			})) {
+				if (controller.signal.aborted) return;
+				onEvent(event);
+			}
+		};
+
+		void follow().catch((error: unknown) => {
+			if (!controller.signal.aborted) {
+				console.error(error);
+			}
+		});
+
+		return () => controller.abort();
+	});
+
+	return null;
+}
+
+function appendEvent(
+	events: readonly MessageStreamEvent[],
+	event: MessageStreamEvent,
+): readonly MessageStreamEvent[] {
+	return events.some((candidate) => candidate.meta.id === event.meta.id)
+		? events
+		: [...events, event];
 }
 
 function SharedAgentChat({
