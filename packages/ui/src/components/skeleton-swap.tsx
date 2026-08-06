@@ -1,12 +1,12 @@
 "use client";
 
 import { Skeleton } from "@crm/ui/components/skeleton";
-import { useMountEffect } from "@crm/ui/hooks/use-mount-effect";
 import { cn } from "@crm/ui/lib/utils";
-import { motion, useReducedMotion } from "motion/react";
+import { domAnimation, LazyMotion, m, useReducedMotion } from "motion/react";
 import {
 	type ReactNode,
 	useCallback,
+	useEffect,
 	useRef,
 	useState,
 } from "react";
@@ -75,16 +75,17 @@ export function SkeletonSwap({
 		[clear, delay, loading, minVisible, showSkeleton],
 	);
 
-	useMountEffect(() => clear);
+	useEffect(() => clear, [clear]);
 
 	return (
-		<div
-			ref={bind}
-			aria-busy={loading}
-			aria-label={label}
-			className={cn("relative grid min-w-0", className)}
-		>
-			<motion.div
+		<LazyMotion features={domAnimation}>
+			<div
+				ref={bind}
+				aria-busy={loading}
+				aria-label={label}
+				className={cn("relative grid min-w-0", className)}
+			>
+			<m.div
 				className="col-start-1 row-start-1 min-w-0"
 				initial={false}
 				animate={{
@@ -99,8 +100,8 @@ export function SkeletonSwap({
 				}}
 			>
 				{children}
-			</motion.div>
-			<motion.div
+			</m.div>
+			<m.div
 				aria-hidden
 				className="pointer-events-none col-start-1 row-start-1 min-w-0"
 				initial={false}
@@ -111,13 +112,14 @@ export function SkeletonSwap({
 				transition={reduced ? INSTANT : CROSSFADE}
 			>
 				{skeleton ?? <DefaultSkeleton />}
-			</motion.div>
+			</m.div>
 			{label ? (
 				<span role="status" aria-live="polite" className="sr-only">
 					{loading ? "" : `${label} loaded`}
 				</span>
 			) : null}
-		</div>
+			</div>
+		</LazyMotion>
 	);
 }
 

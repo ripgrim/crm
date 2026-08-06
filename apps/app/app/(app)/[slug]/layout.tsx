@@ -44,17 +44,17 @@ async function WorkspaceHeader({
 	params,
 }: Pick<LayoutProps<"/[slug]">, "params">) {
 	await connection();
-	const [{ user }, { slug }] = await Promise.all([
-		requireGoogleAccess(),
-		params,
-	]);
-
-	const workspace = await getServerQueryClient()
+	const workspacePromise = getServerQueryClient()
 		.fetchQuery(getServerTrpc().workspace.get.queryOptions())
 		.catch((error: unknown) => {
 			unstable_rethrow(error);
 			return null;
 		});
+	const [{ user }, { slug }, workspace] = await Promise.all([
+		requireGoogleAccess(),
+		params,
+		workspacePromise,
+	]);
 
 	if (workspace && workspace.slug !== slug) notFound();
 

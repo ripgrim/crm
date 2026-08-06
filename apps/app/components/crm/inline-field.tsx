@@ -22,16 +22,6 @@ const LABEL = PROPERTY_LABEL;
 const CONTROL =
 	"h-8 w-full justify-start px-2 font-normal hover:border-input hover:bg-muted/40 border border-transparent";
 
-export function savingField(update: {
-	isPending: boolean;
-	variables?: { data?: object } | undefined;
-}): (field: string) => boolean {
-	const fields = update.isPending
-		? Object.keys(update.variables?.data ?? {})
-		: [];
-	return (field) => fields.includes(field);
-}
-
 export function InlineField({
 	label,
 	value,

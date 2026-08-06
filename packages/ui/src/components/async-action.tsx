@@ -1,14 +1,14 @@
 "use client";
 
 import { CircleAlertIcon, CheckIcon } from "lucide-react";
-import { motion, useReducedMotion } from "motion/react";
+import { domAnimation, LazyMotion, m, useReducedMotion } from "motion/react";
 import {
 	type ReactNode,
 	useCallback,
+	useEffect,
 	useRef,
 	useState,
 } from "react";
-import { useMountEffect } from "@crm/ui/hooks/use-mount-effect";
 import { Spinner } from "@crm/ui/components/spinner";
 
 const TRANSITION = {
@@ -40,13 +40,6 @@ export function useAsyncAction<TArgs extends unknown[], TResult>({
 	const runId = useRef(0);
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const alive = useRef(true);
-	const actionRef = useRef(action);
-	const successRef = useRef(onSuccess);
-	const errorRef = useRef(onError);
-
-	actionRef.current = action;
-	successRef.current = onSuccess;
-	errorRef.current = onError;
 
 	const clear = useCallback(() => {
 		if (timer.current) {
@@ -84,28 +77,28 @@ export function useAsyncAction<TArgs extends unknown[], TResult>({
 			};
 
 			Promise.resolve()
-				.then(() => actionRef.current(...args))
+				.then(() => action(...args))
 				.then(
 					(result) => {
 						settle("success");
-						successRef.current?.(result);
+						onSuccess?.(result);
 					},
 					(error: unknown) => {
 						settle("error");
-						errorRef.current?.(error);
+						onError?.(error);
 					},
 				);
 		},
-		[clear, resetAfter],
+		[action, clear, onError, onSuccess, resetAfter],
 	);
 
-	useMountEffect(() => {
+	useEffect(() => {
 		alive.current = true;
 		return () => {
 			alive.current = false;
 			clear();
 		};
-	});
+	}, [clear]);
 
 	return {
 		status,
@@ -163,12 +156,12 @@ export function AsyncButtonContent({
 	];
 
 	return (
-		<>
+		<LazyMotion features={domAnimation}>
 			<span className="grid min-w-0 items-center justify-items-center">
 				{states.map((state) => {
 					const active = state.status === status;
 					return (
-						<motion.span
+						<m.span
 							key={state.status}
 							aria-hidden={!active}
 							className="col-start-1 row-start-1 inline-flex items-center justify-center gap-1.5 whitespace-nowrap"
@@ -181,7 +174,7 @@ export function AsyncButtonContent({
 							transition={reduced ? INSTANT : TRANSITION}
 						>
 							{state.content}
-						</motion.span>
+						</m.span>
 					);
 				})}
 			</span>
@@ -194,6 +187,6 @@ export function AsyncButtonContent({
 							? errorLabel
 							: ""}
 			</span>
-		</>
+		</LazyMotion>
 	);
 }

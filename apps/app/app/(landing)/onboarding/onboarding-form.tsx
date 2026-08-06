@@ -18,7 +18,7 @@ import {
 import { Spinner } from "@crm/ui/components/spinner";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc/client";
 
@@ -31,7 +31,7 @@ export function OnboardingForm({ placeholder }: { placeholder: string }) {
 	const websiteId = useId();
 	const [name, setName] = useState("");
 	const [slug, setSlug] = useState("");
-	const [slugEdited, setSlugEdited] = useState(false);
+	const slugEdited = useRef(false);
 
 	const save = useMutation(
 		trpc.workspace.update.mutationOptions({
@@ -68,7 +68,7 @@ export function OnboardingForm({ placeholder }: { placeholder: string }) {
 						onChange={(event) => {
 							const next = event.target.value;
 							setName(next);
-							if (!slugEdited) setSlug(workspaceSlug(next));
+							if (!slugEdited.current) setSlug(workspaceSlug(next));
 						}}
 						placeholder={placeholder}
 						autoComplete="organization"
@@ -88,7 +88,7 @@ export function OnboardingForm({ placeholder }: { placeholder: string }) {
 							name="slug"
 							value={slug}
 							onChange={(event) => {
-								setSlugEdited(true);
+								slugEdited.current = true;
 								setSlug(workspaceSlug(event.target.value));
 							}}
 							placeholder={workspaceSlug(placeholder)}

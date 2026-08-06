@@ -19,8 +19,6 @@ const toggleVariants = cva(
 					"h-8 min-w-8 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
 				sm: "h-7 min-w-7 rounded-md px-2.5 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5",
 				lg: "h-9 min-w-9 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
-				choice:
-					"h-auto min-h-8 w-full flex-col items-start gap-0 px-2.5 py-1 text-left whitespace-normal",
 			},
 		},
 		defaultVariants: {
