@@ -37,7 +37,14 @@ describe("agent builder commands", () => {
 		expect(
 			builderCommandType("I want you to create an agent for renewals"),
 		).toBe("CREATE_AGENT");
+		expect(builderCommandType("hey fucker plz create an agent to")).toBe(
+			"CREATE_AGENT",
+		);
 		expect(builderCommandType("How do I create an agent?")).toBe("CHAT");
+		expect(builderCommandType("Tell me how to create an agent")).toBe("CHAT");
+		expect(builderCommandType("I do not want you to create an agent")).toBe(
+			"CHAT",
+		);
 		expect(builderCommandType("Tell me about our agent workflows")).toBe(
 			"CHAT",
 		);
@@ -51,6 +58,11 @@ describe("agent builder commands", () => {
 			commandType: "CREATE_AGENT",
 			body: "that flags stalled deals",
 			invocation: "Build an agent",
+		});
+		expect(consumeBuilderIntent("hey fucker plz create an agent to")).toEqual({
+			commandType: "CREATE_AGENT",
+			body: "to",
+			invocation: "create an agent",
 		});
 		expect(
 			consumeBuilderIntent("Tell me about our agent workflows"),
