@@ -1,23 +1,36 @@
 import { z } from "zod";
 
-export const conversationListInput = z.object({
-	contactId: z.string().optional(),
-	companyId: z.string().optional(),
-	dealId: z.string().optional(),
-});
+const recordShape = {
+	contactId: z.string().trim().min(1).optional(),
+	companyId: z.string().trim().min(1).optional(),
+	dealId: z.string().trim().min(1).optional(),
+};
+
+const hasExactlyOneRecord = (input: {
+	contactId?: string;
+	companyId?: string;
+	dealId?: string;
+}) =>
+	[input.contactId, input.companyId, input.dealId].filter(Boolean).length === 1;
+
+const recordMessage = "Choose exactly one contact, company or deal.";
+
+export const conversationListInput = z
+	.object(recordShape)
+	.refine(hasExactlyOneRecord, { message: recordMessage });
 
 export type ConversationListInput = z.infer<typeof conversationListInput>;
 
-export const conversationSaveInput = z.object({
-	contactId: z.string().optional(),
-	companyId: z.string().optional(),
-	dealId: z.string().optional(),
-	sessionId: z.string().min(1),
-	continuationToken: z.string().nullish(),
-	streamIndex: z.number().int().min(0).optional(),
-	title: z.string().trim().max(120).optional(),
-	messageCount: z.number().int().min(0).optional(),
-});
+export const conversationSaveInput = z
+	.object({
+		...recordShape,
+		sessionId: z.string().trim().min(1),
+		continuationToken: z.string().nullish(),
+		streamIndex: z.number().int().min(0).optional(),
+		title: z.string().trim().max(120).optional(),
+		messageCount: z.number().int().min(0).optional(),
+	})
+	.refine(hasExactlyOneRecord, { message: recordMessage });
 
 export type ConversationSaveInput = z.infer<typeof conversationSaveInput>;
 
@@ -38,18 +51,43 @@ export const builderResource = z.object({
 	imageUrl: z.url().nullable().optional(),
 });
 
-export const builderAttachment = z.object({
+export const builderAttachment = z
+	.object({
+		name: z.string().trim().min(1).max(180),
+		type: z.string().trim().min(1).max(120),
+		size: z.number().int().min(1).max(2_000_000),
+		contentBase64: z
+			.string()
+			.min(1)
+			.max(2_800_000)
+			.regex(
+				/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/,
+				"Attachment content must be valid base64.",
+			),
+	})
+	.refine(
+		(attachment) =>
+			decodedBase64Size(attachment.contentBase64) === attachment.size,
+		{ message: "Attachment size does not match its content.", path: ["size"] },
+	);
+
+const builderStoredAttachment = z.object({
+	id: z.string().trim().min(1),
 	name: z.string().trim().min(1).max(180),
 	type: z.string().trim().min(1).max(120),
 	size: z.number().int().min(1).max(2_000_000),
-	contentBase64: z.string().min(1).max(2_800_000),
+	previewUrl: z.string().nullable().optional(),
 });
 
-export const builderConversationCreateInput = z.object({
+const builderPromptShape = {
 	clientRequestId: z.uuid(),
 	commandType: z.enum(["CHAT", "CREATE_AGENT"]).default("CHAT"),
 	message: z.string().trim().min(1).max(20_000),
 	resources: z.array(builderResource).max(20).default([]),
+};
+
+export const builderConversationCreateInput = z.object({
+	...builderPromptShape,
 	attachments: z.array(builderAttachment).max(5).default([]),
 });
 
@@ -57,10 +95,14 @@ export type BuilderConversationCreateInput = z.infer<
 	typeof builderConversationCreateInput
 >;
 
-export const builderConversationSubmitInput =
-	builderConversationCreateInput.extend({
-		id: z.string().min(1),
-	});
+export const builderConversationSubmitInput = z.object({
+	...builderPromptShape,
+	id: z.string().min(1),
+	attachments: z
+		.array(z.union([builderAttachment, builderStoredAttachment]))
+		.max(5)
+		.default([]),
+});
 
 export type BuilderConversationSubmitInput = z.infer<
 	typeof builderConversationSubmitInput
@@ -95,3 +137,8 @@ export const builderResponseRatingInput = z.object({
 	messageId: z.string().trim().min(1).max(240),
 	rating: z.enum(["UP", "DOWN"]).nullable(),
 });
+
+function decodedBase64Size(value: string): number {
+	const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+	return (value.length / 4) * 3 - padding;
+}

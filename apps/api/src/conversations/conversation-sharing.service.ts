@@ -1,12 +1,14 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { WORKSPACE_ID } from "@crm/auth";
-import type { Db } from "@crm/db";
+import type { Db, Prisma } from "@crm/db";
 import {
 	ForbiddenException,
 	Injectable,
 	NotFoundException,
 } from "@nestjs/common";
 import { InjectDatabase } from "../database/database.constants";
+import { builderMessageWithAttachments } from "./conversation-attachments";
+import { conversationShareTokenHash } from "./conversation-share-token";
 
 @Injectable()
 export class ConversationSharingService {
@@ -32,12 +34,14 @@ export class ConversationSharingService {
 	}
 
 	async create(conversationId: string, userId: string) {
-		await this.ownedBuilder(conversationId, userId);
-
 		const token = randomBytes(32).toString("base64url");
-		const tokenHash = this.hash(token);
+		const tokenHash = conversationShareTokenHash(token);
 
-		await this.db.$transaction(async (tx) => {
+		const created = await this.db.$transaction(async (tx) => {
+			if (!(await this.lockOwnedBuilder(tx, conversationId, userId))) {
+				return false;
+			}
+
 			await tx.agentConversationShare.updateMany({
 				where: { conversationId, revokedAt: null },
 				data: { revokedAt: new Date() },
@@ -46,18 +50,28 @@ export class ConversationSharingService {
 			await tx.agentConversationShare.create({
 				data: { conversationId, createdById: userId, tokenHash },
 			});
+
+			return true;
 		});
+		if (!created) this.missingBuilder(conversationId);
 
 		return { token };
 	}
 
 	async revoke(conversationId: string, userId: string) {
-		await this.ownedBuilder(conversationId, userId);
+		const revoked = await this.db.$transaction(async (tx) => {
+			if (!(await this.lockOwnedBuilder(tx, conversationId, userId))) {
+				return false;
+			}
 
-		await this.db.agentConversationShare.updateMany({
-			where: { conversationId, revokedAt: null },
-			data: { revokedAt: new Date() },
+			await tx.agentConversationShare.updateMany({
+				where: { conversationId, revokedAt: null },
+				data: { revokedAt: new Date() },
+			});
+
+			return true;
 		});
+		if (!revoked) this.missingBuilder(conversationId);
 
 		return { id: conversationId };
 	}
@@ -67,7 +81,7 @@ export class ConversationSharingService {
 
 		const share = await this.db.agentConversationShare.findFirst({
 			where: {
-				tokenHash: this.hash(token),
+				tokenHash: conversationShareTokenHash(token),
 				revokedAt: null,
 				OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
 				conversation: { kind: "BUILDER" },
@@ -105,6 +119,15 @@ export class ConversationSharingService {
 								status: true,
 								errorMessage: true,
 								createdAt: true,
+								attachments: {
+									orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+									select: {
+										id: true,
+										name: true,
+										mediaType: true,
+										size: true,
+									},
+								},
 							},
 						},
 					},
@@ -120,7 +143,7 @@ export class ConversationSharingService {
 		const events = conversation.sessionId
 			? await this.db.agentEvent.findMany({
 					where: { sessionId: conversation.sessionId },
-					orderBy: { emittedAt: "asc" },
+					orderBy: [{ emittedAt: "desc" }, { id: "desc" }],
 					take: 5000,
 					select: { id: true, type: true, data: true, emittedAt: true },
 				})
@@ -136,11 +159,18 @@ export class ConversationSharingService {
 				...artifact,
 				createdAt: artifact.createdAt.toISOString(),
 			})),
-			submissions: conversation.submissions.map((submission) => ({
-				...submission,
-				createdAt: submission.createdAt.toISOString(),
-			})),
-			events: events.map((event) => ({
+			submissions: conversation.submissions.map(
+				({ attachments, ...submission }) => ({
+					...submission,
+					message: builderMessageWithAttachments(
+						submission.message,
+						attachments,
+						token,
+					),
+					createdAt: submission.createdAt.toISOString(),
+				}),
+			),
+			events: events.reverse().map((event) => ({
 				type: event.type,
 				data: event.data,
 				meta: { id: event.id, at: event.emittedAt.toISOString() },
@@ -155,12 +185,36 @@ export class ConversationSharingService {
 		});
 
 		if (!conversation) {
-			throw new NotFoundException(
-				`No builder conversation with id ${conversationId}.`,
-			);
+			this.missingBuilder(conversationId);
 		}
 
 		return conversation;
+	}
+
+	private async lockOwnedBuilder(
+		tx: Prisma.TransactionClient,
+		conversationId: string,
+		userId: string,
+	): Promise<boolean> {
+		const rows = await tx.$queryRaw<Array<{ id: string }>>`
+			SELECT id
+			FROM "agentConversation"
+			WHERE id = ${conversationId}
+			FOR UPDATE
+		`;
+		if (rows.length === 0) return false;
+
+		return (
+			(await tx.agentConversation.count({
+				where: { id: conversationId, userId, kind: "BUILDER" },
+			})) === 1
+		);
+	}
+
+	private missingBuilder(conversationId: string): never {
+		throw new NotFoundException(
+			`No builder conversation with id ${conversationId}.`,
+		);
 	}
 
 	private async assertWorkspaceMember(userId: string): Promise<void> {
@@ -176,9 +230,5 @@ export class ConversationSharingService {
 				"This conversation belongs to another team.",
 			);
 		}
-	}
-
-	private hash(token: string): string {
-		return createHash("sha256").update(token).digest("hex");
 	}
 }

@@ -1,17 +1,19 @@
 import { WORKSPACE_ID } from "@crm/auth";
-import type { Db, Prisma } from "@crm/db";
-import { CACHE_MANAGER } from "@nestjs/cache-manager";
+import { type Db, type Prisma, Prisma as PrismaNamespace } from "@crm/db";
 import {
 	BadRequestException,
-	Inject,
 	Injectable,
 	Logger,
 	NotFoundException,
 	Optional,
 } from "@nestjs/common";
-import type { Cache } from "cache-manager";
 import { AgentTriggerService } from "../agent/agent-trigger.service";
 import { InjectDatabase } from "../database/database.constants";
+import {
+	builderMessageWithAttachments,
+	isPreviewableImage,
+} from "./conversation-attachments";
+import { conversationShareTokenHash } from "./conversation-share-token";
 import type {
 	BuilderConversationCreateInput,
 	BuilderConversationSubmitInput,
@@ -49,10 +51,12 @@ export interface BuilderConversationSummary {
 	} | null;
 }
 
-const LIST_TTL_MS = 10 * 60_000;
-
-const listKey = (userId: string, recordId: string) =>
-	`agent:conversations:${userId}:${recordId}`;
+type ExistingBuilderRequest = {
+	id: string;
+	conversationId: string;
+	submittedById: string;
+	conversation: { id: string; userId: string; kind: string };
+};
 
 @Injectable()
 export class ConversationsService {
@@ -60,7 +64,6 @@ export class ConversationsService {
 
 	constructor(
 		@InjectDatabase() private readonly db: Db,
-		@Inject(CACHE_MANAGER) private readonly cache: Cache,
 		@Optional() private readonly agent?: AgentTriggerService,
 	) {}
 
@@ -69,12 +72,7 @@ export class ConversationsService {
 		userId: string,
 	): Promise<ConversationSummary[]> {
 		const recordId = this.recordId(input);
-		const key = listKey(userId, recordId);
-
-		const cached = await this.cache.get<ConversationSummary[]>(key);
-		if (cached) return cached;
-
-		this.logger.debug({ message: "Conversation list cache miss", recordId });
+		this.logger.debug({ message: "Conversation list read", recordId });
 
 		const rows = await this.db.agentConversation.findMany({
 			where: {
@@ -107,8 +105,6 @@ export class ConversationsService {
 					]
 				: [],
 		);
-
-		await this.cache.set(key, summaries, LIST_TTL_MS);
 
 		return summaries;
 	}
@@ -175,16 +171,7 @@ export class ConversationsService {
 	}
 
 	async builderResources(q: string, userId: string) {
-		const member = await this.db.member.findUnique({
-			where: {
-				organizationId_userId: { organizationId: WORKSPACE_ID, userId },
-			},
-			select: { id: true },
-		});
-
-		if (!member) {
-			throw new NotFoundException("No workspace membership was found.");
-		}
+		await this.assertWorkspaceMember(userId);
 
 		const search = q.trim();
 		const contains = search
@@ -347,6 +334,15 @@ export class ConversationsService {
 						createdAt: true,
 						sentAt: true,
 						acceptedAt: true,
+						attachments: {
+							orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+							select: {
+								id: true,
+								name: true,
+								mediaType: true,
+								size: true,
+							},
+						},
 					},
 				},
 			},
@@ -385,8 +381,9 @@ export class ConversationsService {
 				...artifact,
 				createdAt: artifact.createdAt.toISOString(),
 			})),
-			submissions: row.submissions.map((submission) => ({
+			submissions: row.submissions.map(({ attachments, ...submission }) => ({
 				...submission,
+				message: builderMessageWithAttachments(submission.message, attachments),
 				createdAt: submission.createdAt.toISOString(),
 				sentAt: submission.sentAt?.toISOString() ?? null,
 				acceptedAt: submission.acceptedAt?.toISOString() ?? null,
@@ -398,67 +395,54 @@ export class ConversationsService {
 		input: BuilderConversationCreateInput,
 		userId: string,
 	): Promise<{ id: string }> {
-		const existing = await this.db.agentConversationSubmission.findUnique({
-			where: { clientRequestId: input.clientRequestId },
-			select: {
-				conversation: { select: { id: true, userId: true, kind: true } },
-			},
-		});
+		const existing = await this.requestByClientId(input.clientRequestId);
 
 		if (existing) {
-			if (
-				existing.conversation.userId !== userId ||
-				existing.conversation.kind !== "BUILDER"
-			) {
-				throw new BadRequestException("That request has already been used.");
-			}
-
-			return { id: existing.conversation.id };
+			return this.replayBuilderCreation(existing, userId);
 		}
 
 		const now = new Date();
-		const conversation = await this.db.agentConversation.create({
-			data: {
-				kind: "BUILDER",
-				userId,
-				title: this.titleFrom(input.message),
-				lastReadAt: now,
-				lastMessageAt: now,
-				submissions: {
-					create: {
-						submittedById: userId,
-						clientRequestId: input.clientRequestId,
-						commandType: input.commandType,
-						message: this.builderMessage(input),
+		try {
+			const conversation = await this.db.agentConversation.create({
+				data: {
+					kind: "BUILDER",
+					userId,
+					title: null,
+					lastReadAt: now,
+					lastMessageAt: now,
+					submissions: {
+						create: {
+							submittedById: userId,
+							clientRequestId: input.clientRequestId,
+							commandType: input.commandType,
+							message: this.builderMessage(input),
+							attachments: {
+								create: this.attachmentWrites(input.attachments),
+							},
+						},
 					},
 				},
-			},
-			select: { id: true },
-		});
+				select: { id: true },
+			});
 
-		this.agent?.builderConversationQueued();
-
-		return conversation;
+			this.agent?.builderConversationQueued();
+			return conversation;
+		} catch (error) {
+			if (!isUniqueConstraint(error)) throw error;
+			const winner = await this.requestByClientId(input.clientRequestId);
+			if (!winner) throw error;
+			return this.replayBuilderCreation(winner, userId);
+		}
 	}
 
 	async submitBuilder(
 		input: BuilderConversationSubmitInput,
 		userId: string,
 	): Promise<{ id: string }> {
-		const existing = await this.db.agentConversationSubmission.findUnique({
-			where: { clientRequestId: input.clientRequestId },
-			select: { id: true, conversationId: true, submittedById: true },
-		});
+		const existing = await this.requestByClientId(input.clientRequestId);
 
 		if (existing) {
-			if (
-				existing.conversationId !== input.id ||
-				existing.submittedById !== userId
-			) {
-				throw new BadRequestException("That request has already been used.");
-			}
-
-			return { id: existing.id };
+			return this.replayBuilderSubmission(existing, input.id, userId);
 		}
 
 		const conversation = await this.db.agentConversation.findFirst({
@@ -472,49 +456,52 @@ export class ConversationsService {
 			);
 		}
 
-		const submission = await this.db.$transaction(async (tx) => {
-			const created = await tx.agentConversationSubmission.create({
-				data: {
-					conversationId: input.id,
-					submittedById: userId,
-					clientRequestId: input.clientRequestId,
-					commandType: input.commandType,
-					message: this.builderMessage(input),
-				},
-				select: { id: true },
+		try {
+			const attachmentWrites = await this.submissionAttachmentWrites(
+				input,
+				userId,
+			);
+			const submission = await this.db.$transaction(async (tx) => {
+				const created = await tx.agentConversationSubmission.create({
+					data: {
+						conversationId: input.id,
+						submittedById: userId,
+						clientRequestId: input.clientRequestId,
+						commandType: input.commandType,
+						message: this.builderMessage(input),
+						attachments: {
+							create: attachmentWrites,
+						},
+					},
+					select: { id: true },
+				});
+
+				await tx.agentConversation.update({
+					where: { id: input.id },
+					data: { lastMessageAt: new Date(), lastReadAt: new Date() },
+				});
+
+				return created;
 			});
 
-			await tx.agentConversation.update({
-				where: { id: input.id },
-				data: { lastMessageAt: new Date(), lastReadAt: new Date() },
-			});
-
-			return created;
-		});
-
-		this.agent?.builderConversationQueued();
-
-		return submission;
+			this.agent?.builderConversationQueued();
+			return submission;
+		} catch (error) {
+			if (!isUniqueConstraint(error)) throw error;
+			const winner = await this.requestByClientId(input.clientRequestId);
+			if (!winner) throw error;
+			return this.replayBuilderSubmission(winner, input.id, userId);
+		}
 	}
 
 	async answerBuilderQuestion(
 		input: BuilderQuestionResponseInput,
 		userId: string,
 	): Promise<{ id: string }> {
-		const existing = await this.db.agentConversationSubmission.findUnique({
-			where: { clientRequestId: input.clientRequestId },
-			select: { id: true, conversationId: true, submittedById: true },
-		});
+		const existing = await this.requestByClientId(input.clientRequestId);
 
 		if (existing) {
-			if (
-				existing.conversationId !== input.id ||
-				existing.submittedById !== userId
-			) {
-				throw new BadRequestException("That request has already been used.");
-			}
-
-			return { id: existing.id };
+			return this.replayBuilderSubmission(existing, input.id, userId);
 		}
 
 		const conversation = await this.db.agentConversation.findFirst({
@@ -597,34 +584,58 @@ export class ConversationsService {
 
 		const displayText =
 			typeof selected?.label === "string" ? selected.label : answer;
-		const submission = await this.db.$transaction(async (tx) => {
-			const created = await tx.agentConversationSubmission.create({
-				data: {
-					conversationId: input.id,
-					submittedById: userId,
-					clientRequestId: input.clientRequestId,
-					commandType: "CHAT",
-					message: {
-						text: displayText,
-						resources: [],
-						attachments: [],
-						inputResponse: { requestId: input.requestId, answer },
+		try {
+			const submission = await this.db.$transaction(async (tx) => {
+				const created = await tx.agentConversationSubmission.create({
+					data: {
+						conversationId: input.id,
+						submittedById: userId,
+						clientRequestId: input.clientRequestId,
+						inputRequestId: input.requestId,
+						commandType: "CHAT",
+						message: {
+							text: displayText,
+							resources: [],
+							attachments: [],
+							inputResponse: { requestId: input.requestId, answer },
+						},
 					},
+					select: { id: true },
+				});
+
+				await tx.agentConversation.update({
+					where: { id: input.id },
+					data: { lastMessageAt: new Date(), lastReadAt: new Date() },
+				});
+
+				return created;
+			});
+
+			this.agent?.builderConversationQueued();
+			return submission;
+		} catch (error) {
+			if (!isUniqueConstraint(error)) throw error;
+
+			const winner = await this.requestByClientId(input.clientRequestId);
+			if (winner) {
+				return this.replayBuilderSubmission(winner, input.id, userId);
+			}
+
+			const answered = await this.db.agentConversationSubmission.findFirst({
+				where: {
+					conversationId: input.id,
+					inputRequestId: input.requestId,
 				},
 				select: { id: true },
 			});
+			if (answered) {
+				throw new BadRequestException(
+					"That follow-up question has already been answered.",
+				);
+			}
 
-			await tx.agentConversation.update({
-				where: { id: input.id },
-				data: { lastMessageAt: new Date(), lastReadAt: new Date() },
-			});
-
-			return created;
-		});
-
-		this.agent?.builderConversationQueued();
-
-		return submission;
+			throw error;
+		}
 	}
 
 	async markRead(id: string, userId: string): Promise<{ id: string }> {
@@ -638,6 +649,59 @@ export class ConversationsService {
 		}
 
 		return { id };
+	}
+
+	async attachment(
+		id: string,
+		userId: string,
+		shareToken?: string,
+	): Promise<{
+		name: string;
+		mediaType: string;
+		content: Uint8Array;
+		previewable: boolean;
+	}> {
+		await this.assertWorkspaceMember(userId);
+		const share = shareToken?.trim();
+		const row = await this.db.agentConversationAttachment.findFirst({
+			where: {
+				id,
+				submission: {
+					conversation: {
+						kind: "BUILDER",
+						OR: [
+							{ userId },
+							...(share
+								? [
+										{
+											shares: {
+												some: {
+													tokenHash: conversationShareTokenHash(share),
+													revokedAt: null,
+													OR: [
+														{ expiresAt: null },
+														{ expiresAt: { gt: new Date() } },
+													],
+												},
+											},
+										},
+									]
+								: []),
+						],
+					},
+				},
+			},
+			select: { name: true, mediaType: true, content: true },
+		});
+
+		if (!row) {
+			throw new NotFoundException("That attachment is unavailable.");
+		}
+
+		return {
+			...row,
+			previewable: isPreviewableImage(row.mediaType),
+		};
 	}
 
 	async rateBuilderResponse(
@@ -689,38 +753,104 @@ export class ConversationsService {
 		userId: string,
 	): Promise<{ id: string }> {
 		const recordId = this.recordId(input);
+		const updateExisting = async (existing: {
+			id: string;
+			kind: string;
+			userId: string;
+			contactId: string | null;
+			companyId: string | null;
+			dealId: string | null;
+		}) => {
+			if (existing.userId !== userId || existing.kind !== "RECORD") {
+				throw new NotFoundException(
+					`No record conversation with session ${input.sessionId}.`,
+				);
+			}
 
-		const conversation = await this.db.agentConversation.upsert({
+			const existingRecordId =
+				existing.contactId ?? existing.companyId ?? existing.dealId;
+			if (existingRecordId !== recordId) {
+				throw new BadRequestException(
+					"A conversation cannot be moved to another CRM record.",
+				);
+			}
+
+			const updated = await this.db.agentConversation.updateMany({
+				where: {
+					id: existing.id,
+					kind: "RECORD",
+					userId,
+					contactId: input.contactId ?? null,
+					companyId: input.companyId ?? null,
+					dealId: input.dealId ?? null,
+				},
+				data: {
+					continuationToken: input.continuationToken ?? null,
+					streamIndex: input.streamIndex ?? 0,
+					messageCount: input.messageCount ?? 0,
+					lastMessageAt: new Date(),
+				},
+			});
+
+			if (updated.count !== 1) {
+				throw new NotFoundException(
+					`No record conversation with session ${input.sessionId}.`,
+				);
+			}
+
+			return { id: existing.id };
+		};
+
+		const existing = await this.db.agentConversation.findUnique({
 			where: { sessionId: input.sessionId },
-			create: {
-				sessionId: input.sessionId,
-				continuationToken: input.continuationToken ?? null,
-				streamIndex: input.streamIndex ?? 0,
-				title: input.title?.slice(0, 120) ?? null,
-				messageCount: input.messageCount ?? 0,
-				userId,
-				contactId: input.contactId ?? null,
-				companyId: input.companyId ?? null,
-				dealId: input.dealId ?? null,
+			select: {
+				id: true,
+				kind: true,
+				userId: true,
+				contactId: true,
+				companyId: true,
+				dealId: true,
 			},
-			update: {
-				continuationToken: input.continuationToken ?? null,
-				streamIndex: input.streamIndex ?? 0,
-				messageCount: input.messageCount ?? 0,
-				lastMessageAt: new Date(),
-			},
-			select: { id: true, userId: true },
 		});
+		let conversation: { id: string };
 
-		if (conversation.userId !== userId) {
-			throw new BadRequestException(
-				"That conversation belongs to someone else.",
-			);
+		if (existing) {
+			conversation = await updateExisting(existing);
+		} else {
+			try {
+				conversation = await this.db.agentConversation.create({
+					data: {
+						sessionId: input.sessionId,
+						continuationToken: input.continuationToken ?? null,
+						streamIndex: input.streamIndex ?? 0,
+						title: input.title?.slice(0, 120) ?? null,
+						messageCount: input.messageCount ?? 0,
+						userId,
+						contactId: input.contactId ?? null,
+						companyId: input.companyId ?? null,
+						dealId: input.dealId ?? null,
+					},
+					select: { id: true },
+				});
+			} catch (error) {
+				if (!isUniqueConstraint(error)) throw error;
+				const winner = await this.db.agentConversation.findUnique({
+					where: { sessionId: input.sessionId },
+					select: {
+						id: true,
+						kind: true,
+						userId: true,
+						contactId: true,
+						companyId: true,
+						dealId: true,
+					},
+				});
+				if (!winner) throw error;
+				conversation = await updateExisting(winner);
+			}
 		}
 
-		await this.cache.del(listKey(userId, recordId));
-
-		return { id: conversation.id };
+		return conversation;
 	}
 
 	async events(input: ConversationEventsInput, userId: string) {
@@ -737,12 +867,12 @@ export class ConversationsService {
 
 		const events = await this.db.agentEvent.findMany({
 			where: { sessionId: conversation.sessionId },
-			orderBy: { emittedAt: "asc" },
+			orderBy: [{ emittedAt: "desc" }, { id: "desc" }],
 			take: input.limit,
 			select: { id: true, type: true, data: true, emittedAt: true },
 		});
 
-		return events.map((event) => ({
+		return events.reverse().map((event) => ({
 			type: event.type,
 			data: event.data,
 			meta: { id: event.id, at: event.emittedAt.toISOString() },
@@ -755,9 +885,6 @@ export class ConversationsService {
 			select: {
 				id: true,
 				userId: true,
-				contactId: true,
-				companyId: true,
-				dealId: true,
 				sessionId: true,
 			},
 		});
@@ -776,10 +903,6 @@ export class ConversationsService {
 			await tx.agentConversation.delete({ where: { id } });
 		});
 
-		const recordId =
-			conversation.contactId ?? conversation.companyId ?? conversation.dealId;
-		if (recordId) await this.cache.del(listKey(userId, recordId));
-
 		this.logger.log({ message: "Conversation removed", conversationId: id });
 
 		return { id };
@@ -790,11 +913,14 @@ export class ConversationsService {
 		companyId?: string;
 		dealId?: string;
 	}): string {
-		const recordId = input.contactId ?? input.companyId ?? input.dealId;
+		const recordIds = [input.contactId, input.companyId, input.dealId].filter(
+			(recordId): recordId is string => Boolean(recordId),
+		);
+		const [recordId] = recordIds;
 
-		if (!recordId) {
+		if (!recordId || recordIds.length !== 1) {
 			throw new BadRequestException(
-				"A conversation belongs to a contact, a company or a deal.",
+				"Choose exactly one contact, company or deal.",
 			);
 		}
 
@@ -804,21 +930,152 @@ export class ConversationsService {
 	private builderMessage(input: {
 		message: string;
 		resources: BuilderConversationCreateInput["resources"];
-		attachments: BuilderConversationCreateInput["attachments"];
+		attachments:
+			| BuilderConversationCreateInput["attachments"]
+			| BuilderConversationSubmitInput["attachments"];
 	}): Prisma.InputJsonValue {
 		return {
 			text: input.message,
 			resources: input.resources,
-			attachments: input.attachments,
+			attachments: input.attachments.map(({ name, type, size }) => ({
+				name,
+				type,
+				size,
+			})),
 		};
 	}
 
-	private titleFrom(message: string): string {
-		const normalized = message.replace(/\s+/g, " ").trim();
-		return normalized.length <= 80
-			? normalized
-			: `${normalized.slice(0, 77).trimEnd()}…`;
+	private attachmentWrites(
+		attachments: BuilderConversationCreateInput["attachments"],
+	) {
+		return attachments.map((attachment) => ({
+			name: attachment.name,
+			mediaType: attachment.type,
+			size: attachment.size,
+			content: Buffer.from(attachment.contentBase64, "base64"),
+		}));
 	}
+
+	private async submissionAttachmentWrites(
+		input: BuilderConversationSubmitInput,
+		userId: string,
+	) {
+		const referencedIds = input.attachments.flatMap((attachment) =>
+			"contentBase64" in attachment ? [] : [attachment.id],
+		);
+		const referenced =
+			referencedIds.length > 0
+				? await this.db.agentConversationAttachment.findMany({
+						where: {
+							id: { in: referencedIds },
+							submission: {
+								conversation: { id: input.id, userId, kind: "BUILDER" },
+							},
+						},
+						select: {
+							id: true,
+							name: true,
+							mediaType: true,
+							size: true,
+							content: true,
+						},
+					})
+				: [];
+		const referencedById = new Map(referenced.map((row) => [row.id, row]));
+
+		if (referencedIds.some((id) => !referencedById.has(id))) {
+			throw new BadRequestException(
+				"One or more attachments are no longer available.",
+			);
+		}
+
+		return input.attachments.map((attachment) => {
+			if ("contentBase64" in attachment) {
+				return {
+					name: attachment.name,
+					mediaType: attachment.type,
+					size: attachment.size,
+					content: Buffer.from(attachment.contentBase64, "base64"),
+				};
+			}
+
+			const stored = referencedById.get(attachment.id);
+			if (!stored) {
+				throw new BadRequestException(
+					"One or more attachments are no longer available.",
+				);
+			}
+			return {
+				name: stored.name,
+				mediaType: stored.mediaType,
+				size: stored.size,
+				content: stored.content,
+			};
+		});
+	}
+
+	private async assertWorkspaceMember(userId: string): Promise<void> {
+		const member = await this.db.member.findUnique({
+			where: {
+				organizationId_userId: { organizationId: WORKSPACE_ID, userId },
+			},
+			select: { id: true },
+		});
+
+		if (!member) {
+			throw new NotFoundException("No workspace membership was found.");
+		}
+	}
+
+	private requestByClientId(
+		clientRequestId: string,
+	): Promise<ExistingBuilderRequest | null> {
+		return this.db.agentConversationSubmission.findUnique({
+			where: { clientRequestId },
+			select: {
+				id: true,
+				conversationId: true,
+				submittedById: true,
+				conversation: { select: { id: true, userId: true, kind: true } },
+			},
+		});
+	}
+
+	private replayBuilderCreation(
+		existing: ExistingBuilderRequest,
+		userId: string,
+	): { id: string } {
+		if (
+			existing.conversation.userId !== userId ||
+			existing.conversation.kind !== "BUILDER"
+		) {
+			throw new BadRequestException("That request has already been used.");
+		}
+
+		return { id: existing.conversation.id };
+	}
+
+	private replayBuilderSubmission(
+		existing: ExistingBuilderRequest,
+		conversationId: string,
+		userId: string,
+	): { id: string } {
+		if (
+			existing.conversationId !== conversationId ||
+			existing.submittedById !== userId
+		) {
+			throw new BadRequestException("That request has already been used.");
+		}
+
+		return { id: existing.id };
+	}
+}
+
+function isUniqueConstraint(error: unknown): boolean {
+	return (
+		error instanceof PrismaNamespace.PrismaClientKnownRequestError &&
+		error.code === "P2002"
+	);
 }
 
 function recordOf(value: unknown): Record<string, unknown> {

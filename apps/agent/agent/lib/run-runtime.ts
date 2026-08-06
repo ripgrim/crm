@@ -1,7 +1,12 @@
+import { createHash } from "node:crypto";
 import { ActivityType, db, type Prisma } from "@crm/db";
+import { lockIdempotencyKey } from "@crm/db/idempotency";
 import { readCompanyHistory, readDealHistory } from "./accounts";
 import { readCrmHistory } from "./crm";
 import { searchCrm } from "./lookup";
+import { lockAgentRun, runTerminalEventId } from "./run-state";
+
+const ACTION_LEASE_MS = 5 * 60_000;
 
 type RunResource = {
 	kind: "integration" | "company" | "contact" | "deal";
@@ -33,6 +38,9 @@ export async function runContext(runId: string) {
 	});
 
 	if (!run) throw new Error("This agent run is unavailable.");
+	if (run.status !== "RUNNING") {
+		throw new Error("This agent run is not active.");
+	}
 
 	return {
 		...run,
@@ -103,6 +111,7 @@ export async function createRunActivity(
 		where: { id: runId },
 		select: {
 			id: true,
+			status: true,
 			agentId: true,
 			initiatedById: true,
 			agent: { select: { createdById: true } },
@@ -111,8 +120,13 @@ export async function createRunActivity(
 	});
 	if (!run) throw new Error("This agent run is unavailable.");
 
-	const target = await targetRecord(input.targetKind, input.targetId);
+	assertActionAllowed(run.version.manifest, "crm.activity.create");
+	assertResourceAllowed(manifestResources(run.version.manifest), {
+		kind: input.targetKind,
+		id: input.targetId,
+	});
 	const idempotencyKey = `${runId}:${callId}`;
+	const requestHash = actionRequestHash(input);
 	const existing = await db.agentAction.findUnique({
 		where: { idempotencyKey },
 		select: {
@@ -120,8 +134,10 @@ export async function createRunActivity(
 			status: true,
 			externalId: true,
 			errorMessage: true,
+			requestHash: true,
 		},
 	});
+	if (existing) assertActionRequestMatches(existing.requestHash, requestHash);
 	if (existing?.status === "SUCCEEDED") {
 		return {
 			actionId: existing.id,
@@ -129,59 +145,110 @@ export async function createRunActivity(
 			replayed: true,
 		};
 	}
+	if (run.status !== "RUNNING") {
+		throw new Error("This agent run is not active.");
+	}
+	if (input.type === "TASK" && !input.subject?.trim()) {
+		throw new Error("A CRM task needs a subject.");
+	}
+	const dueAt = input.dueAt ? new Date(input.dueAt) : null;
+	if (dueAt && Number.isNaN(dueAt.getTime())) {
+		throw new Error("The due date is invalid.");
+	}
+	const target = await targetRecord(input.targetKind, input.targetId);
+	if (!target) throw new Error("The requested CRM target no longer exists.");
 
-	const action =
-		existing ??
-		(await db.agentAction.create({
-			data: {
-				agentId: run.agentId,
-				runId,
-				type: "crm.activity.create",
-				provider: "crm",
-				targetType: input.targetKind,
-				targetId: input.targetId,
-				targetLabel: target?.label ?? input.targetId,
-				summary:
-					input.subject?.trim() ||
-					`Create a ${input.type.toLowerCase()} on ${target?.label ?? input.targetId}`,
-				metadata: { activityType: input.type },
-				idempotencyKey,
-			},
-			select: {
-				id: true,
-				status: true,
-				externalId: true,
-				errorMessage: true,
-			},
-		}));
+	let action = existing;
+	if (!action) {
+		action = await db.$transaction(async (tx) => {
+			await lockIdempotencyKey(tx, idempotencyKey);
+			const winner = await tx.agentAction.findUnique({
+				where: { idempotencyKey },
+				select: {
+					id: true,
+					status: true,
+					externalId: true,
+					errorMessage: true,
+					requestHash: true,
+				},
+			});
+			if (winner) {
+				assertActionRequestMatches(winner.requestHash, requestHash);
+				return winner;
+			}
+
+			return tx.agentAction.create({
+				data: {
+					agentId: run.agentId,
+					runId,
+					type: "crm.activity.create",
+					provider: "crm",
+					targetType: input.targetKind,
+					targetId: input.targetId,
+					targetLabel: target.label,
+					summary:
+						input.subject?.trim() ||
+						`Create a ${input.type.toLowerCase()} on ${target.label}`,
+					metadata: { activityType: input.type },
+					idempotencyKey,
+					requestHash,
+				},
+				select: {
+					id: true,
+					status: true,
+					externalId: true,
+					errorMessage: true,
+					requestHash: true,
+				},
+			});
+		});
+	}
+	if (action.status === "SUCCEEDED") {
+		return {
+			actionId: action.id,
+			activityId: action.externalId,
+			replayed: true,
+		};
+	}
+
+	const claimed = await db.agentAction.updateMany({
+		where: {
+			id: action.id,
+			OR: [
+				{ status: { in: ["PLANNED", "FAILED"] } },
+				{
+					status: "RUNNING",
+					startedAt: { lt: new Date(Date.now() - ACTION_LEASE_MS) },
+				},
+			],
+		},
+		data: {
+			status: "RUNNING",
+			startedAt: new Date(),
+			completedAt: null,
+			attemptCount: { increment: 1 },
+			errorCode: null,
+			errorMessage: null,
+		},
+	});
+	if (claimed.count === 0) {
+		const current = await db.agentAction.findUnique({
+			where: { id: action.id },
+			select: { status: true, externalId: true },
+		});
+		if (current?.status === "SUCCEEDED") {
+			return {
+				actionId: action.id,
+				activityId: current.externalId,
+				replayed: true,
+			};
+		}
+		throw new Error("This agent action is already in progress.");
+	}
 
 	try {
-		assertActionAllowed(run.version.manifest, "crm.activity.create");
-		assertResourceAllowed(manifestResources(run.version.manifest), {
-			kind: input.targetKind,
-			id: input.targetId,
-		});
-		if (!target) throw new Error("The requested CRM target no longer exists.");
-		if (input.type === "TASK" && !input.subject?.trim()) {
-			throw new Error("A CRM task needs a subject.");
-		}
-
-		await db.agentAction.update({
-			where: { id: action.id },
-			data: {
-				status: "RUNNING",
-				startedAt: new Date(),
-				attemptCount: { increment: 1 },
-				errorCode: null,
-				errorMessage: null,
-			},
-		});
-
 		const activityId = `agent-action-${action.id}`;
 		const now = new Date();
-		const dueAt = input.dueAt ? new Date(input.dueAt) : null;
-		if (dueAt && Number.isNaN(dueAt.getTime()))
-			throw new Error("The due date is invalid.");
 
 		await db.$transaction(async (tx) => {
 			await tx.activity.upsert({
@@ -239,8 +306,8 @@ export async function createRunActivity(
 		return { actionId: action.id, activityId, replayed: false };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		await db.agentAction.update({
-			where: { id: action.id },
+		await db.agentAction.updateMany({
+			where: { id: action.id, status: "RUNNING" },
 			data: {
 				status: "FAILED",
 				errorCode: "ACTION_REJECTED",
@@ -256,38 +323,59 @@ export async function finishRun(
 	runId: string,
 	input: { summary: string; result?: Record<string, unknown> | null },
 ) {
-	const run = await db.agentRun.update({
-		where: { id: runId },
-		data: {
-			status: "SUCCEEDED",
-			summary: input.summary,
-			result: (input.result ?? {}) as Prisma.InputJsonValue,
-			finishedAt: new Date(),
-		},
-		select: { id: true, agentId: true, versionId: true },
-	});
+	return db.$transaction(async (tx) => {
+		const run = await lockAgentRun(tx, runId);
+		if (run.status === "SUCCEEDED") {
+			return { id: run.id, status: "SUCCEEDED" as const };
+		}
+		if (run.status !== "RUNNING") {
+			throw new Error(`This agent run already ended with ${run.status}.`);
+		}
 
-	await db.agentAuditEvent.upsert({
-		where: {
-			agentId_type_requestId: {
-				agentId: run.agentId,
+		const sequence = run.nextEventSequence + 1;
+		const finishedAt = new Date();
+		await tx.agentRun.update({
+			where: { id: runId },
+			data: {
+				status: "SUCCEEDED",
+				summary: input.summary,
+				result: (input.result ?? {}) as Prisma.InputJsonValue,
+				finishedAt,
+				nextEventSequence: sequence,
+			},
+		});
+		await tx.agentRunEvent.create({
+			data: {
+				id: runTerminalEventId(run.id, "completed"),
+				runId: run.id,
+				sequence,
 				type: "run.completed",
+				data: { summary: input.summary },
+				emittedAt: finishedAt,
+			},
+		});
+		await tx.agentAuditEvent.upsert({
+			where: {
+				agentId_type_requestId: {
+					agentId: run.agentId,
+					type: "run.completed",
+					requestId: run.id,
+				},
+			},
+			create: {
+				agentId: run.agentId,
+				versionId: run.versionId,
+				actorType: "AGENT",
+				actorId: run.id,
+				type: "run.completed",
+				summary: input.summary,
 				requestId: run.id,
 			},
-		},
-		create: {
-			agentId: run.agentId,
-			versionId: run.versionId,
-			actorType: "AGENT",
-			actorId: run.id,
-			type: "run.completed",
-			summary: input.summary,
-			requestId: run.id,
-		},
-		update: { summary: input.summary },
-	});
+			update: {},
+		});
 
-	return { id: run.id, status: "SUCCEEDED" as const };
+		return { id: run.id, status: "SUCCEEDED" as const };
+	});
 }
 
 function manifestResources(value: unknown): RunResource[] {
@@ -392,4 +480,35 @@ function recordOf(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: {};
+}
+
+function actionRequestHash(input: {
+	type: "NOTE" | "TASK";
+	targetKind: "company" | "contact" | "deal";
+	targetId: string;
+	subject?: string | null;
+	body?: string | null;
+	dueAt?: string | null;
+}): string {
+	return createHash("sha256")
+		.update(
+			JSON.stringify({
+				type: input.type,
+				targetKind: input.targetKind,
+				targetId: input.targetId,
+				subject: input.subject?.trim() || null,
+				body: input.body?.trim() || null,
+				dueAt: input.dueAt?.trim() || null,
+			}),
+		)
+		.digest("hex");
+}
+
+function assertActionRequestMatches(
+	existingHash: string | null,
+	requestHash: string,
+): void {
+	if (existingHash !== requestHash) {
+		throw new Error("That agent action call was already used for other input.");
+	}
 }

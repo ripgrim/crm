@@ -19,6 +19,7 @@ let triggerId: string;
 let queuedRunId: string;
 let waitingRunId: string;
 let runningRunId: string;
+let deliveryRunId: string;
 
 async function clean() {
 	if (agentId) {
@@ -113,7 +114,7 @@ beforeAll(async () => {
 	});
 	triggerId = trigger.id;
 
-	const [queued, waiting, running] = await Promise.all([
+	const [queued, waiting, running, delivery] = await Promise.all([
 		db.agentRun.create({
 			data: {
 				agentId,
@@ -146,6 +147,19 @@ beforeAll(async () => {
 				idempotencyKey: `${idempotencyPrefix}-running`,
 				correlationId: `${idempotencyPrefix}-running`,
 				startedAt: new Date(),
+				sessionId: `${idempotencyPrefix}-active-session`,
+			},
+			select: { id: true },
+		}),
+		db.agentRun.create({
+			data: {
+				agentId,
+				versionId,
+				triggerType: "MANUAL",
+				status: "RUNNING",
+				idempotencyKey: `${idempotencyPrefix}-delivery`,
+				correlationId: `${idempotencyPrefix}-delivery`,
+				startedAt: new Date(),
 			},
 			select: { id: true },
 		}),
@@ -153,11 +167,11 @@ beforeAll(async () => {
 	queuedRunId = queued.id;
 	waitingRunId = waiting.id;
 	runningRunId = running.id;
+	deliveryRunId = delivery.id;
 });
 
 afterAll(async () => {
 	await clean();
-	await db.$disconnect();
 });
 
 describe("deleting an agent", () => {
@@ -166,14 +180,18 @@ describe("deleting an agent", () => {
 
 		expect(removed.status).toBe("DELETED");
 		expect(removed.disabledTriggers).toBe(1);
-		expect(removed.cancelledRuns).toBe(2);
+		expect(removed.cancelledRuns).toBe(3);
 
 		const [definition, trigger, runs, runEvents, auditEvent, listed] =
 			await Promise.all([
 				db.agentDefinition.findUnique({ where: { id: agentId } }),
 				db.agentTrigger.findUnique({ where: { id: triggerId } }),
 				db.agentRun.findMany({
-					where: { id: { in: [queuedRunId, waitingRunId, runningRunId] } },
+					where: {
+						id: {
+							in: [queuedRunId, waitingRunId, runningRunId, deliveryRunId],
+						},
+					},
 					select: {
 						id: true,
 						status: true,
@@ -182,7 +200,9 @@ describe("deleting an agent", () => {
 					},
 				}),
 				db.agentRunEvent.findMany({
-					where: { runId: { in: [queuedRunId, waitingRunId] } },
+					where: {
+						runId: { in: [queuedRunId, waitingRunId, deliveryRunId] },
+					},
 					select: { runId: true, type: true, data: true },
 				}),
 				db.agentAuditEvent.findFirst({
@@ -194,9 +214,16 @@ describe("deleting an agent", () => {
 		expect(definition?.deletedAt).not.toBeNull();
 		expect(trigger).toMatchObject({ enabled: false, nextRunAt: null });
 		expect(
-			runs.filter((run) => [queuedRunId, waitingRunId].includes(run.id)),
+			runs.filter((run) =>
+				[queuedRunId, waitingRunId, deliveryRunId].includes(run.id),
+			),
 		).toEqual(
 			expect.arrayContaining([
+				expect.objectContaining({
+					status: "CANCELLED",
+					errorCode: "AGENT_DELETED",
+					finishedAt: expect.any(Date),
+				}),
 				expect.objectContaining({
 					status: "CANCELLED",
 					errorCode: "AGENT_DELETED",
@@ -210,7 +237,7 @@ describe("deleting an agent", () => {
 			]),
 		);
 		expect(runs.find((run) => run.id === runningRunId)?.status).toBe("RUNNING");
-		expect(runEvents).toHaveLength(2);
+		expect(runEvents).toHaveLength(3);
 		expect(runEvents).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
@@ -222,7 +249,7 @@ describe("deleting an agent", () => {
 		expect(auditEvent?.after).toEqual({
 			status: "DELETED",
 			disabledTriggers: 1,
-			cancelledRuns: 2,
+			cancelledRuns: 3,
 		});
 		expect(listed.some((agent) => agent.id === agentId)).toBe(false);
 

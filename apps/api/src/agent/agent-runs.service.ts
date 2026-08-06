@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Db } from "@crm/db";
+import { lockIdempotencyKey } from "@crm/db/idempotency";
 import {
 	BadRequestException,
 	Injectable,
@@ -122,24 +123,29 @@ export class AgentRunsService {
 	}
 
 	async runNow(input: AgentRunNowInput, userId: string) {
+		await this.access.assertMember(userId);
 		const existing = await this.db.agentRun.findUnique({
 			where: { idempotencyKey: input.clientRequestId },
 			select: { id: true, agentId: true },
 		});
 
 		if (existing) {
-			if (existing.agentId !== input.id) {
-				throw new BadRequestException(
-					"That run request has already been used.",
-				);
-			}
-
+			this.assertReplayMatches(existing.agentId, input.id);
+			this.trigger.deployedAgentRunQueued();
 			return { id: existing.id };
 		}
 
-		await this.access.assertMember(userId);
-
 		const run = await this.db.$transaction(async (tx) => {
+			await lockIdempotencyKey(tx, input.clientRequestId);
+			const replay = await tx.agentRun.findUnique({
+				where: { idempotencyKey: input.clientRequestId },
+				select: { id: true, agentId: true },
+			});
+			if (replay) {
+				this.assertReplayMatches(replay.agentId, input.id);
+				return { id: replay.id };
+			}
+
 			const [agent] = await tx.$queryRaw<
 				Array<{
 					id: string;
@@ -147,11 +153,11 @@ export class AgentRunsService {
 					currentVersionId: string | null;
 				}>
 			>`
-				SELECT id, status, "currentVersionId"
-				FROM "agentDefinition"
-				WHERE id = ${input.id}
-				FOR UPDATE
-			`;
+					SELECT id, status, "currentVersionId"
+					FROM "agentDefinition"
+					WHERE id = ${input.id}
+					FOR UPDATE
+				`;
 
 			if (!agent || agent.status === "DELETED") {
 				throw new NotFoundException(`No agent with id ${input.id}.`);
@@ -198,5 +204,14 @@ export class AgentRunsService {
 
 	private async readableAgent(agentId: string, userId: string) {
 		return this.access.assertCanRead(agentId, userId);
+	}
+
+	private assertReplayMatches(
+		existingAgentId: string,
+		requestedAgentId: string,
+	) {
+		if (existingAgentId !== requestedAgentId) {
+			throw new BadRequestException("That run request has already been used.");
+		}
 	}
 }

@@ -1,6 +1,7 @@
 import { db, type Prisma } from "@crm/db";
 import { defineHook } from "eve/hooks";
 import { currentFocus } from "../lib/focus";
+import { lockAgentRun } from "../lib/run-state";
 import { attribute, purposeOf } from "../lib/session-purpose";
 
 export default defineHook({
@@ -13,27 +14,29 @@ export default defineHook({
 			try {
 				const data = ("data" in event ? (event.data ?? {}) : {}) as object;
 				const emittedAt = event.meta?.at ? new Date(event.meta.at) : new Date();
-				await db.agentEvent.createMany({
-					data: [
-						{
-							id,
-							sessionId: ctx.session.id,
-							contactId: currentFocus().contactId,
-							type: event.type,
-							data,
-							emittedAt,
-						},
-					],
-					skipDuplicates: true,
-				});
+				await db.$transaction(async (tx) => {
+					await tx.agentEvent.createMany({
+						data: [
+							{
+								id,
+								sessionId: ctx.session.id,
+								contactId: currentFocus().contactId,
+								type: event.type,
+								data,
+								emittedAt,
+							},
+						],
+						skipDuplicates: true,
+					});
 
-				const purpose = purposeOf(ctx);
-				if (purpose === "builder") {
-					await persistBuilderLifecycle(event, ctx.session.id, ctx);
-				}
-				if (purpose === "team-agent") {
-					await persistRunEvent(id, event.type, data, emittedAt, ctx);
-				}
+					const purpose = purposeOf(ctx);
+					if (purpose === "builder") {
+						await persistBuilderLifecycle(tx, event, ctx.session.id, ctx);
+					}
+					if (purpose === "team-agent") {
+						await persistRunEvent(tx, id, event.type, data, emittedAt, ctx);
+					}
+				});
 			} catch (error) {
 				console.warn("[audit] could not record event", {
 					type: event.type,
@@ -45,6 +48,7 @@ export default defineHook({
 });
 
 async function persistBuilderLifecycle(
+	tx: Prisma.TransactionClient,
 	event: { type: string },
 	sessionId: string,
 	ctx: Parameters<typeof purposeOf>[0],
@@ -53,7 +57,7 @@ async function persistBuilderLifecycle(
 	if (!conversationId) return;
 
 	if (event.type === "session.started") {
-		await db.agentConversation.updateMany({
+		await tx.agentConversation.updateMany({
 			where: { id: conversationId, kind: "BUILDER" },
 			data: { sessionId, continuationToken: null },
 		});
@@ -62,7 +66,7 @@ async function persistBuilderLifecycle(
 	if (event.type === "message.received") {
 		const submissionId = attribute(ctx, "submissionId");
 		if (submissionId) {
-			await db.agentConversationSubmission.updateMany({
+			await tx.agentConversationSubmission.updateMany({
 				where: { id: submissionId, conversationId },
 				data: { status: "ACCEPTED", acceptedAt: new Date() },
 			});
@@ -71,6 +75,7 @@ async function persistBuilderLifecycle(
 }
 
 async function persistRunEvent(
+	tx: Prisma.TransactionClient,
 	eventId: string,
 	type: string,
 	data: object,
@@ -80,49 +85,63 @@ async function persistRunEvent(
 	const runId = attribute(ctx, "runId");
 	if (!runId) return;
 
-	const run = await db.agentRun.update({
-		where: { id: runId },
+	const run = await lockAgentRun(tx, runId);
+	const existing = await tx.agentRunEvent.findUnique({
+		where: { id: eventId },
+		select: { id: true },
+	});
+	if (existing) return;
+
+	const sequence = run.nextEventSequence + 1;
+	const mayStart =
+		type === "session.started" &&
+		(run.status === "QUEUED" || run.status === "RUNNING");
+	await tx.agentRun.update({
+		where: { id: run.id },
 		data: {
-			nextEventSequence: { increment: 1 },
-			...(type === "session.started"
+			nextEventSequence: sequence,
+			...(mayStart
 				? {
 						sessionId: ctx.session.id,
 						status: "RUNNING",
-						startedAt: new Date(),
+						startedAt: run.startedAt ?? new Date(),
 					}
 				: {}),
 		},
-		select: { nextEventSequence: true },
 	});
 
-	await db.agentRunEvent.createMany({
-		data: [
-			{
-				id: eventId,
-				runId,
-				sequence: run.nextEventSequence,
-				type,
-				data: data as Prisma.InputJsonValue,
-				emittedAt,
-			},
-		],
-		skipDuplicates: true,
+	await tx.agentRunEvent.create({
+		data: {
+			id: eventId,
+			runId,
+			sequence,
+			type,
+			data: data as Prisma.InputJsonValue,
+			emittedAt,
+		},
 	});
 
 	if (type === "step.completed") {
 		const usage = recordOf(data).usage;
 		const values = recordOf(usage);
-		await db.agentRun.update({
+		const inputTokens = numberOf(values.inputTokens);
+		const outputTokens = numberOf(values.outputTokens);
+		const costUsd = numberOf(values.costUsd);
+		const current = await tx.agentRun.findUniqueOrThrow({
+			where: { id: runId },
+			select: { inputTokens: true, outputTokens: true, costUsd: true },
+		});
+		await tx.agentRun.update({
 			where: { id: runId },
 			data: {
-				...(numberOf(values.inputTokens) !== null
-					? { inputTokens: { increment: numberOf(values.inputTokens) ?? 0 } }
+				...(inputTokens !== null
+					? { inputTokens: (current.inputTokens ?? 0) + inputTokens }
 					: {}),
-				...(numberOf(values.outputTokens) !== null
-					? { outputTokens: { increment: numberOf(values.outputTokens) ?? 0 } }
+				...(outputTokens !== null
+					? { outputTokens: (current.outputTokens ?? 0) + outputTokens }
 					: {}),
-				...(numberOf(values.costUsd) !== null
-					? { costUsd: { increment: numberOf(values.costUsd) ?? 0 } }
+				...(costUsd !== null
+					? { costUsd: Number(current.costUsd ?? 0) + costUsd }
 					: {}),
 			},
 		});
@@ -131,8 +150,8 @@ async function persistRunEvent(
 	if (type === "message.completed") {
 		const message = recordOf(data).message;
 		if (typeof message === "string" && message.trim()) {
-			await db.agentRun.update({
-				where: { id: runId },
+			await tx.agentRun.updateMany({
+				where: { id: runId, status: "RUNNING" },
 				data: { summary: message.slice(0, 1000) },
 			});
 		}

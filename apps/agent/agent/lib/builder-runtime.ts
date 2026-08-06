@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { db, type Prisma } from "@crm/db";
 import { readAgentModel } from "@crm/db/settings";
 
@@ -57,10 +58,14 @@ export async function writeBuilderArtifact(
 	assertSafeArtifact(content);
 
 	return db.$transaction(async (tx) => {
-		const conversation = await tx.agentConversation.findFirst({
-			where: { id: conversationId, userId, kind: "BUILDER" },
-			select: { id: true },
-		});
+		const [conversation] = await tx.$queryRaw<Array<{ id: string }>>`
+			SELECT id
+			FROM "agentConversation"
+			WHERE id = ${conversationId}
+				AND "userId" = ${userId}
+				AND kind = 'BUILDER'
+			FOR UPDATE
+		`;
 		if (!conversation) {
 			throw new Error("This builder conversation is unavailable.");
 		}
@@ -71,7 +76,7 @@ export async function writeBuilderArtifact(
 			select: { id: true, revision: true, content: true, status: true },
 		});
 
-		if (latest?.content === content && latest.status === "WRITING") {
+		if (latest?.content === content) {
 			return { saved: true as const, id: latest.id, revision: latest.revision };
 		}
 
@@ -152,7 +157,7 @@ export async function saveBuilderDraft(
 ) {
 	const conversation = await db.agentConversation.findFirst({
 		where: { id: conversationId, userId, kind: "BUILDER" },
-		select: { id: true, agentId: true },
+		select: { id: true },
 	});
 
 	if (!conversation)
@@ -172,6 +177,8 @@ export async function saveBuilderDraft(
 	const nextRunAt = scheduleDate(input.trigger, now);
 	const manifest = {
 		kind: "crm-team-agent",
+		name: input.name,
+		description: input.description,
 		trigger: {
 			type: input.trigger.type,
 			name: input.trigger.name,
@@ -200,7 +207,21 @@ export async function saveBuilderDraft(
 	for (const file of files) assertSafeArtifact(file.content);
 
 	return db.$transaction(async (tx) => {
-		let agentId = conversation.agentId;
+		const [lockedConversation] = await tx.$queryRaw<
+			Array<{ id: string; agentId: string | null }>
+		>`
+			SELECT id, "agentId"
+			FROM "agentConversation"
+			WHERE id = ${conversationId}
+				AND "userId" = ${userId}
+				AND kind = 'BUILDER'
+			FOR UPDATE
+		`;
+		if (!lockedConversation) {
+			throw new Error("This builder conversation is unavailable.");
+		}
+
+		let agentId = lockedConversation.agentId;
 		let created = false;
 
 		if (!agentId) {
@@ -220,17 +241,55 @@ export async function saveBuilderDraft(
 				data: { agentId, title: input.name },
 			});
 		} else {
-			await tx.agentDefinition.update({
-				where: { id: agentId },
-				data: { name: input.name, description: input.description },
-			});
+			const [agent] = await tx.$queryRaw<
+				Array<{
+					status: "DRAFT" | "LIVE" | "PAUSED" | "ARCHIVED" | "DELETED";
+				}>
+			>`
+				SELECT status
+				FROM "agentDefinition"
+				WHERE id = ${agentId}
+				FOR UPDATE
+			`;
+			if (!agent || agent.status === "DELETED") {
+				throw new Error("This agent is unavailable.");
+			}
+			if (agent.status === "DRAFT") {
+				await tx.agentDefinition.update({
+					where: { id: agentId },
+					data: { name: input.name, description: input.description },
+				});
+			}
 		}
 
 		const latest = await tx.agentVersion.findFirst({
 			where: { agentId },
 			orderBy: { number: "desc" },
-			select: { number: true },
+			select: {
+				id: true,
+				number: true,
+				status: true,
+				instructions: true,
+				manifest: true,
+				modelId: true,
+			},
 		});
+		if (
+			latest?.status === "READY" &&
+			latest.instructions === input.instructions &&
+			latest.modelId === model.id &&
+			isDeepStrictEqual(latest.manifest, manifest)
+		) {
+			await persistArtifactSnapshots(tx, conversationId, latest.id, files);
+			return {
+				saved: true as const,
+				agentId,
+				versionId: latest.id,
+				versionNumber: latest.number,
+				status: latest.status,
+			};
+		}
+
 		const number = (latest?.number ?? 0) + 1;
 		const version = await tx.agentVersion.create({
 			data: {
@@ -252,25 +311,7 @@ export async function saveBuilderDraft(
 			select: { id: true, number: true, status: true },
 		});
 
-		for (const file of files) {
-			const latestArtifact = await tx.agentBuilderArtifact.findFirst({
-				where: { conversationId, path: file.path },
-				orderBy: { revision: "desc" },
-				select: { revision: true, content: true },
-			});
-			await tx.agentBuilderArtifact.create({
-				data: {
-					conversationId,
-					versionId: version.id,
-					path: file.path,
-					language: file.language,
-					content: file.content,
-					previousContent: latestArtifact?.content ?? null,
-					revision: (latestArtifact?.revision ?? 0) + 1,
-					status: "READY",
-				},
-			});
-		}
+		await persistArtifactSnapshots(tx, conversationId, version.id, files);
 
 		await tx.agentTrigger.create({
 			data: {
@@ -320,6 +361,58 @@ export async function saveBuilderDraft(
 			status: version.status,
 		};
 	});
+}
+
+async function persistArtifactSnapshots(
+	tx: Prisma.TransactionClient,
+	conversationId: string,
+	versionId: string,
+	files: ReturnType<typeof artifactFiles>,
+) {
+	for (const file of files) {
+		const latestArtifact = await tx.agentBuilderArtifact.findFirst({
+			where: { conversationId, path: file.path },
+			orderBy: { revision: "desc" },
+			select: {
+				id: true,
+				versionId: true,
+				revision: true,
+				content: true,
+				status: true,
+			},
+		});
+		if (
+			latestArtifact?.content === file.content &&
+			latestArtifact.versionId === versionId &&
+			latestArtifact.status === "READY"
+		) {
+			continue;
+		}
+		if (
+			latestArtifact?.content === file.content &&
+			latestArtifact.status === "WRITING" &&
+			latestArtifact.versionId === null
+		) {
+			await tx.agentBuilderArtifact.update({
+				where: { id: latestArtifact.id },
+				data: { versionId, status: "READY" },
+			});
+			continue;
+		}
+
+		await tx.agentBuilderArtifact.create({
+			data: {
+				conversationId,
+				versionId,
+				path: file.path,
+				language: file.language,
+				content: file.content,
+				previousContent: latestArtifact?.content ?? null,
+				revision: (latestArtifact?.revision ?? 0) + 1,
+				status: "READY",
+			},
+		});
+	}
 }
 
 async function validateDraft(userId: string, input: DraftAgentInput) {

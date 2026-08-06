@@ -1,4 +1,5 @@
 import type { Db, Prisma } from "@crm/db";
+import type { AgentDefinitionStatus } from "@crm/db/enums";
 import {
 	BadRequestException,
 	Injectable,
@@ -127,10 +128,11 @@ export class AgentDefinitionsService {
 	}
 
 	async update(input: AgentUpdateInput, userId: string) {
-		const agent = await this.access.assertCanManage(input.id, userId);
+		await this.access.assertCanManage(input.id, userId);
 		const description = input.description?.trim() || null;
 
 		const updated = await this.db.$transaction(async (tx) => {
+			const agent = await this.lockAgent(tx, input.id);
 			const row = await tx.agentDefinition.update({
 				where: { id: input.id },
 				data: { name: input.name, description },
@@ -157,43 +159,45 @@ export class AgentDefinitionsService {
 	}
 
 	async deploy(input: AgentDeployInput, userId: string) {
-		const agent = await this.access.assertCanManage(input.id, userId);
-		const existing = await this.db.agentAuditEvent.findFirst({
-			where: {
-				agentId: input.id,
-				type: "agent.deployed",
-				requestId: input.clientRequestId,
-			},
-			select: { versionId: true },
-		});
+		await this.access.assertCanManage(input.id, userId);
+		return this.db.$transaction(async (tx) => {
+			const agent = await this.lockAgent(tx, input.id);
+			const existing = await tx.agentAuditEvent.findFirst({
+				where: {
+					agentId: input.id,
+					type: "agent.deployed",
+					requestId: input.clientRequestId,
+				},
+				select: { versionId: true },
+			});
 
-		if (existing) {
-			if (existing.versionId !== input.versionId) {
-				throw new BadRequestException(
-					"That deployment request has already been used.",
-				);
+			if (existing) {
+				if (existing.versionId !== input.versionId) {
+					throw new BadRequestException(
+						"That deployment request has already been used.",
+					);
+				}
+
+				return { id: input.id, versionId: input.versionId, status: "LIVE" };
 			}
 
-			return { id: input.id, versionId: input.versionId, status: "LIVE" };
-		}
+			const version = await tx.agentVersion.findFirst({
+				where: { id: input.versionId, agentId: input.id },
+				select: { id: true, number: true, status: true, manifest: true },
+			});
 
-		const version = await this.db.agentVersion.findFirst({
-			where: { id: input.versionId, agentId: input.id },
-			select: { id: true, number: true, status: true },
-		});
+			if (!version) {
+				throw new NotFoundException(`No version with id ${input.versionId}.`);
+			}
 
-		if (!version) {
-			throw new NotFoundException(`No version with id ${input.versionId}.`);
-		}
+			if (version.status !== "READY" && version.status !== "DEPLOYED") {
+				throw new BadRequestException(
+					"Only a validated agent version can be deployed.",
+				);
+			}
+			const metadata = versionMetadata(version.manifest);
 
-		if (version.status !== "READY" && version.status !== "DEPLOYED") {
-			throw new BadRequestException(
-				"Only a validated agent version can be deployed.",
-			);
-		}
-
-		const now = new Date();
-		return this.db.$transaction(async (tx) => {
+			const now = new Date();
 			await tx.agentVersion.updateMany({
 				where: {
 					agentId: input.id,
@@ -214,7 +218,12 @@ export class AgentDefinitionsService {
 
 			await tx.agentDefinition.update({
 				where: { id: input.id },
-				data: { currentVersionId: input.versionId, status: "LIVE" },
+				data: {
+					currentVersionId: input.versionId,
+					status: "LIVE",
+					archivedAt: null,
+					...metadata,
+				},
 			});
 
 			await tx.agentTrigger.updateMany({
@@ -237,7 +246,7 @@ export class AgentDefinitionsService {
 					type: "agent.deployed",
 					summary: `Made version ${version.number} live for the team`,
 					before: { status: agent.status },
-					after: { status: "LIVE", version: version.number },
+					after: { status: "LIVE", version: version.number, ...metadata },
 					requestId: input.clientRequestId,
 				},
 			});
@@ -250,24 +259,23 @@ export class AgentDefinitionsService {
 		return this.changeStatus(
 			id,
 			userId,
+			["LIVE"],
 			"PAUSED",
 			"agent.paused",
 			"Paused agent",
+			"Only a live agent can be paused.",
 		);
 	}
 
 	async resume(id: string, userId: string) {
-		const agent = await this.access.assertCanManage(id, userId);
-		if (agent.status !== "PAUSED") {
-			throw new BadRequestException("Only a paused agent can be resumed.");
-		}
-
 		return this.changeStatus(
 			id,
 			userId,
+			["PAUSED"],
 			"LIVE",
 			"agent.resumed",
 			"Resumed agent",
+			"Only a paused agent can be resumed.",
 		);
 	}
 
@@ -275,25 +283,24 @@ export class AgentDefinitionsService {
 		return this.changeStatus(
 			id,
 			userId,
+			["LIVE", "PAUSED"],
 			"ARCHIVED",
 			"agent.archived",
 			"Archived agent",
+			"Only a live or paused agent can be archived.",
 			{ archivedAt: new Date() },
 		);
 	}
 
 	async restore(id: string, userId: string) {
-		const agent = await this.access.assertCanManage(id, userId);
-		if (agent.status !== "ARCHIVED") {
-			throw new BadRequestException("Only an archived agent can be restored.");
-		}
-
 		return this.changeStatus(
 			id,
 			userId,
+			["ARCHIVED"],
 			"PAUSED",
 			"agent.restored",
 			"Restored agent",
+			"Only an archived agent can be restored.",
 			{ archivedAt: null },
 		);
 	}
@@ -325,7 +332,10 @@ export class AgentDefinitionsService {
 				SELECT id
 				FROM "agentRun"
 				WHERE "agentId" = ${id}
-					AND status IN ('QUEUED', 'WAITING_FOR_APPROVAL')
+					AND (
+						status IN ('QUEUED', 'WAITING_FOR_APPROVAL')
+						OR (status = 'RUNNING' AND "sessionId" IS NULL)
+					)
 				ORDER BY id
 				FOR UPDATE
 			`;
@@ -389,14 +399,21 @@ export class AgentDefinitionsService {
 	private async changeStatus(
 		id: string,
 		userId: string,
-		status: "LIVE" | "PAUSED" | "ARCHIVED" | "DELETED",
+		allowedFrom: readonly AgentDefinitionStatus[],
+		status: "LIVE" | "PAUSED" | "ARCHIVED",
 		type: string,
 		summary: string,
+		invalidStatusMessage: string,
 		extra: Prisma.AgentDefinitionUpdateInput = {},
 	) {
-		const before = await this.access.assertCanManage(id, userId);
+		await this.access.assertCanManage(id, userId);
 
 		return this.db.$transaction(async (tx) => {
+			const before = await this.lockAgent(tx, id);
+			if (!allowedFrom.includes(before.status)) {
+				throw new BadRequestException(invalidStatusMessage);
+			}
+
 			const agent = await tx.agentDefinition.update({
 				where: { id },
 				data: { status, ...extra },
@@ -420,8 +437,51 @@ export class AgentDefinitionsService {
 		});
 	}
 
+	private async lockAgent(tx: Prisma.TransactionClient, id: string) {
+		const [agent] = await tx.$queryRaw<
+			Array<{
+				id: string;
+				status: AgentDefinitionStatus;
+				name: string;
+				description: string | null;
+			}>
+		>`
+			SELECT id, status, name, description
+			FROM "agentDefinition"
+			WHERE id = ${id}
+			FOR UPDATE
+		`;
+
+		if (!agent || agent.status === "DELETED") {
+			throw new NotFoundException(`No agent with id ${id}.`);
+		}
+
+		return agent;
+	}
+
 	private async canAdmin(userId: string): Promise<boolean> {
 		const role = await this.access.assertMember(userId);
 		return role === "owner" || role === "admin";
 	}
+}
+
+function versionMetadata(manifest: unknown): {
+	name?: string;
+	description?: string | null;
+} {
+	if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+		return {};
+	}
+
+	const record = manifest as Record<string, unknown>;
+	const name = typeof record.name === "string" ? record.name.trim() : "";
+	const description =
+		typeof record.description === "string"
+			? record.description.trim() || null
+			: undefined;
+
+	return {
+		...(name ? { name } : {}),
+		...(description !== undefined ? { description } : {}),
+	};
 }
