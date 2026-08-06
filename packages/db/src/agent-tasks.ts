@@ -19,6 +19,10 @@ export function isDirectKind(kind: string): kind is DirectKind {
 	return (DIRECT_KINDS as readonly string[]).includes(kind);
 }
 
+export const MAX_ATTEMPTS = 3;
+
+export const RETIRED_OUTCOME = `Gave up after ${MAX_ATTEMPTS} attempts: the session never reported back.`;
+
 export const PRIORITY = {
 	brand: 900,
 	portrait: 800,

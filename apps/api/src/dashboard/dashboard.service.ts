@@ -1,6 +1,7 @@
 import { ActivityType, type Db, DealStage } from "@crm/db";
 import { Injectable } from "@nestjs/common";
 import { toCents } from "../crm/values";
+import { ConversionService } from "../currency/conversion.service";
 import { InjectDatabase } from "../database/database.constants";
 import { OPEN_DEAL_STAGES } from "../deals/deal-stage";
 import type { DashboardSummaryInput } from "./dashboard.contracts";
@@ -30,7 +31,10 @@ function monthKey(date: Date): number {
 
 @Injectable()
 export class DashboardService {
-	constructor(@InjectDatabase() private readonly db: Db) {}
+	constructor(
+		@InjectDatabase() private readonly db: Db,
+		private readonly conversion: ConversionService,
+	) {}
 
 	async summary(actingUserId: string, input: DashboardSummaryInput) {
 		const mine = input.scope === "me";
@@ -43,19 +47,30 @@ export class DashboardService {
 		const trendStart = monthStart(now, -(TREND_MONTHS - 1));
 		const rateStart = new Date(now.getTime() - RATE_WINDOW_DAYS * DAY_MS);
 
+		const base = await this.conversion.reportingCurrency();
+		const counted = this.conversion.countedWhere(base);
+
 		const [
 			openByStage,
+			openValueByStage,
 			recentDeals,
 			closingThisMonthTotals,
 			biggestOpen,
 			overdueTasks,
 			recentActivity,
+			unconverted,
 		] = await Promise.all([
 			this.db.deal.groupBy({
 				by: ["stage"],
 				where: { ...owned, stage: { in: [...OPEN_DEAL_STAGES] } },
 				_count: { _all: true },
-				_sum: { amount: true },
+			}),
+			this.db.deal.groupBy({
+				by: ["stage"],
+				where: {
+					AND: [{ ...owned, stage: { in: [...OPEN_DEAL_STAGES] } }, counted],
+				},
+				_sum: { baseAmount: true },
 			}),
 			this.db.deal.findMany({
 				where: {
@@ -66,7 +81,8 @@ export class DashboardService {
 					],
 				},
 				select: {
-					amount: true,
+					baseAmount: true,
+					baseCurrency: true,
 					stage: true,
 					createdAt: true,
 					closedAt: true,
@@ -74,17 +90,22 @@ export class DashboardService {
 			}),
 			this.db.deal.aggregate({
 				where: {
-					...owned,
-					stage: { in: [...OPEN_DEAL_STAGES] },
-					expectedCloseDate: { gte: startOfMonth, lt: startOfNextMonth },
+					AND: [
+						{
+							...owned,
+							stage: { in: [...OPEN_DEAL_STAGES] },
+							expectedCloseDate: { gte: startOfMonth, lt: startOfNextMonth },
+						},
+						counted,
+					],
 				},
 				_count: { _all: true },
-				_sum: { amount: true },
+				_sum: { baseAmount: true },
 			}),
 			this.db.deal.findMany({
 				where: { ...owned, stage: { in: [...OPEN_DEAL_STAGES] } },
 				orderBy: [
-					{ amount: { sort: "desc", nulls: "last" } },
+					{ baseAmount: { sort: "desc", nulls: "last" } },
 					{ expectedCloseDate: "asc" },
 				],
 				take: 6,
@@ -94,6 +115,8 @@ export class DashboardService {
 					stage: true,
 					amount: true,
 					currency: true,
+					baseAmount: true,
+					baseCurrency: true,
 					expectedCloseDate: true,
 					stageChangedAt: true,
 					company: {
@@ -141,14 +164,16 @@ export class DashboardService {
 					deal: { select: { id: true, name: true } },
 				},
 			}),
+			this.conversion.unconverted(owned),
 		]);
 
 		const stages = OPEN_DEAL_STAGES.map((stage) => {
 			const group = openByStage.find((row) => row.stage === stage);
+			const value = openValueByStage.find((row) => row.stage === stage);
 			return {
 				stage: stage as DealStage,
 				count: group?._count._all ?? 0,
-				valueCents: toCents(group?._sum.amount ?? null) ?? 0,
+				valueCents: toCents(value?._sum.baseAmount ?? null) ?? 0,
 			};
 		});
 
@@ -163,11 +188,14 @@ export class DashboardService {
 		const wonPrevMonth = { count: 0, valueCents: 0 };
 		let wins = 0;
 		let losses = 0;
+		let valuedWins = 0;
 		let wonCents = 0;
 		let cycleDays = 0;
 
 		for (const deal of recentDeals) {
-			const cents = toCents(deal.amount) ?? 0;
+			const valued =
+				deal.baseCurrency === base ? toCents(deal.baseAmount) : null;
+			const cents = valued ?? 0;
 
 			const created = trend[monthKey(deal.createdAt) - firstBucket];
 			if (created) created.created += cents;
@@ -192,7 +220,10 @@ export class DashboardService {
 			if (closedAt < rateStart) continue;
 			if (won) {
 				wins += 1;
-				wonCents += cents;
+				if (valued !== null) {
+					valuedWins += 1;
+					wonCents += cents;
+				}
 				cycleDays += (closedAt.getTime() - deal.createdAt.getTime()) / DAY_MS;
 			} else if (stage === DealStage.CLOSED_LOST) {
 				losses += 1;
@@ -203,6 +234,8 @@ export class DashboardService {
 
 		return {
 			scope: input.scope,
+			reportingCurrency: base,
+			unconverted,
 			pipeline: {
 				stages,
 				totalCents: stages.reduce((total, s) => total + s.valueCents, 0),
@@ -215,22 +248,33 @@ export class DashboardService {
 				wins,
 				losses,
 				winRate: decided === 0 ? null : wins / decided,
-				avgDealCents: wins === 0 ? null : Math.round(wonCents / wins),
+				avgDealCents:
+					valuedWins === 0 ? null : Math.round(wonCents / valuedWins),
 				avgCycleDays: wins === 0 ? null : Math.round(cycleDays / wins),
 			},
 			trend,
 			closingThisMonthTotal: {
 				count: closingThisMonthTotals._count._all,
-				valueCents: toCents(closingThisMonthTotals._sum.amount) ?? 0,
+				valueCents: toCents(closingThisMonthTotals._sum.baseAmount) ?? 0,
 			},
-			biggestOpen: biggestOpen.map(
-				({ amount, expectedCloseDate, stageChangedAt, ...deal }) => ({
-					...deal,
-					amountCents: toCents(amount),
-					expectedCloseDate: expectedCloseDate?.toISOString() ?? null,
-					stageChangedAt: stageChangedAt.toISOString(),
-				}),
-			),
+			biggestOpen: biggestOpen
+				.map(
+					({
+						amount,
+						baseAmount,
+						baseCurrency,
+						expectedCloseDate,
+						stageChangedAt,
+						...deal
+					}) => ({
+						...deal,
+						amountCents: toCents(amount),
+						baseAmountCents: baseCurrency === base ? toCents(baseAmount) : null,
+						expectedCloseDate: expectedCloseDate?.toISOString() ?? null,
+						stageChangedAt: stageChangedAt.toISOString(),
+					}),
+				)
+				.sort((a, b) => (b.baseAmountCents ?? -1) - (a.baseAmountCents ?? -1)),
 			overdueTasks: overdueTasks.map(({ dueAt, ...task }) => ({
 				...task,
 				dueAt: dueAt?.toISOString() ?? null,

@@ -1,4 +1,5 @@
 import { db, Prisma } from "@crm/db";
+import { MAX_ATTEMPTS, RETIRED_OUTCOME } from "@crm/db/agent-tasks";
 
 export type LeasedTask = {
 	id: string;
@@ -21,9 +22,7 @@ export type TaskSubject = {
 
 const LEASE_MS = 10 * 60_000;
 
-export const MAX_ATTEMPTS = 3;
-
-export { DIRECT_KINDS } from "@crm/db/agent-tasks";
+export { DIRECT_KINDS, MAX_ATTEMPTS } from "@crm/db/agent-tasks";
 
 export async function claimDue(
 	limit: number,
@@ -70,7 +69,7 @@ export async function retireExhausted(): Promise<TaskSubject[]> {
 	return db.$queryRaw<TaskSubject[]>`
 		UPDATE "agentTask" AS t
 		SET "finishedAt" = ${now},
-			"outcome" = ${`Gave up after ${MAX_ATTEMPTS} attempts: the session never reported back.`}
+			"outcome" = ${RETIRED_OUTCOME}
 		WHERE t."finishedAt" IS NULL
 			AND t."attempts" >= ${MAX_ATTEMPTS}
 			AND (t."leasedUntil" IS NULL OR t."leasedUntil" < ${now})

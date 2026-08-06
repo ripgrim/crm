@@ -1,6 +1,7 @@
 "use client";
 
 import UserMultiple from "@carbon/icons-react/es/UserMultiple";
+import { CURRENCIES, normalizeCurrency } from "@crm/db/currency";
 import { EmptyCellValue } from "@crm/ui/components/empty-cell";
 import {
 	EntityLogo,
@@ -13,10 +14,12 @@ import { formatMoney } from "@crm/ui/lib/format";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AgentPanel } from "@/components/crm/agent-panel";
+import { contactName } from "@/components/crm/contact-name";
 import {
 	InlineDateField,
 	InlineField,
 	InlineSelectField,
+	InlineTextArea,
 } from "@/components/crm/inline-field";
 import { OwnerCell } from "@/components/crm/owner-cell";
 import { DealStageMenu } from "@/components/crm/stage-change";
@@ -46,6 +49,47 @@ import { RecordSheetFrame } from "./record-parts";
 import { useOpenRecord, useRecordSheetView } from "./record-stack";
 
 type Deal = RouterOutputs["deals"]["byId"];
+
+const CURRENCY_OPTIONS = CURRENCIES.map((entry) => ({
+	value: entry.code,
+	label: `${entry.code} · ${entry.name}`,
+}));
+
+function dealCurrency(currency: string) {
+	return normalizeCurrency(currency) || currency;
+}
+
+function currencyOptions(currency: string) {
+	if (CURRENCY_OPTIONS.some((option) => option.value === currency)) {
+		return CURRENCY_OPTIONS;
+	}
+
+	return [
+		{ value: currency, label: `${currency} — no longer supported` },
+		...CURRENCY_OPTIONS,
+	];
+}
+
+function ReportedValue({ deal }: { deal: Deal }) {
+	const currency = dealCurrency(deal.currency);
+
+	if (currency === deal.reportingCurrency) return null;
+	if (deal.amountCents === null) return null;
+
+	return (
+		<DetailSheetProperty label={`In ${deal.reportingCurrency}`}>
+			{deal.baseAmountCents === null ? (
+				<span className="text-muted-foreground">
+					No {currency} rate — left out of totals
+				</span>
+			) : (
+				<span className="tabular-nums text-muted-foreground">
+					≈ {formatMoney(deal.baseAmountCents, deal.reportingCurrency)}
+				</span>
+			)}
+		</DetailSheetProperty>
+	);
+}
 
 const CONTACT_COLUMNS = [
 	{ id: "name", header: "Name", width: "w-[30%]", className: "pl-5" },
@@ -146,7 +190,7 @@ export function DealSheet({ dealId }: { dealId: string }) {
 								<EmptyCellValue />
 							) : (
 								<span className="tabular-nums">
-									{formatMoney(deal.amountCents, deal.currency)}
+									{formatMoney(deal.amountCents, dealCurrency(deal.currency))}
 								</span>
 							)}
 						</DetailSheetStat>
@@ -189,6 +233,8 @@ function DealOverview({ deal }: { deal: Deal }) {
 
 	const save = (data: Parameters<typeof update.mutate>[0]["data"]) =>
 		update.mutate({ id: deal.id, data });
+
+	const currency = dealCurrency(deal.currency);
 
 	const isSaving = savingField(update);
 
@@ -238,21 +284,16 @@ function DealOverview({ deal }: { deal: Deal }) {
 							save({ amountCents: Math.round(parsed * 100) });
 						}}
 						render={(value) =>
-							formatMoney(Math.round(Number(value) * 100), deal.currency)
+							formatMoney(Math.round(Number(value) * 100), currency)
 						}
 					/>
-					<InlineField
+					<InlineSelectField
 						label="Currency"
-						value={deal.currency}
-						saving={isSaving("currency")}
-						onSave={(currency) => {
-							if (currency.length !== 3) {
-								toast.error("Use a three-letter currency code, like USD.");
-								return;
-							}
-							save({ currency: currency.toUpperCase() });
-						}}
+						value={currency}
+						options={currencyOptions(currency)}
+						onSave={(currency) => save({ currency })}
 					/>
+					<ReportedValue deal={deal} />
 					<InlineDateField
 						label="Close date"
 						value={deal.expectedCloseDate}
@@ -279,7 +320,78 @@ function DealOverview({ deal }: { deal: Deal }) {
 					/>
 				</DetailSheetProperties>
 			</DetailSheetSection>
+
+			<DetailSheetSection title="Description">
+				<InlineTextArea
+					label="Description"
+					value={deal.description}
+					placeholder={`What ${deal.company.name} is buying, why now, and what stands in the way.`}
+					saving={isSaving("description")}
+					onSave={(description) => save({ description })}
+				/>
+			</DetailSheetSection>
+
+			<WhereItStands deal={deal} />
 		</DetailSheetBody>
+	);
+}
+
+function WhereItStands({ deal }: { deal: Deal }) {
+	const openRecord = useOpenRecord();
+
+	return (
+		<DetailSheetSection title="Where it stands">
+			<DetailSheetProperties>
+				<DetailSheetProperty label="Opened">
+					<LocalDateTime date={deal.createdAt} options={DATE_OPTIONS} />
+				</DetailSheetProperty>
+
+				<DetailSheetProperty label="In stage since">
+					<LocalDateTime date={deal.stageChangedAt} options={DATE_OPTIONS} />
+				</DetailSheetProperty>
+
+				{deal.closedAt ? (
+					<DetailSheetProperty label="Closed">
+						<LocalDateTime date={deal.closedAt} options={DATE_OPTIONS} />
+					</DetailSheetProperty>
+				) : null}
+
+				{deal.closedReason ? (
+					<DetailSheetProperty label="Reason" wide>
+						{deal.closedReason}
+					</DetailSheetProperty>
+				) : null}
+
+				<DetailSheetProperty label="On it" wide>
+					{deal.contacts.length === 0 ? (
+						<span className="text-muted-foreground">
+							Nobody from {deal.company.name} is attached yet.
+						</span>
+					) : (
+						<span className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+							{deal.contacts.map((contact) => {
+								const aside = contact.role ?? contact.title;
+								return (
+									<button
+										key={contact.id}
+										type="button"
+										onClick={() =>
+											openRecord({ kind: "contact", id: contact.id })
+										}
+										className="min-w-0 truncate underline-offset-2 hover:underline"
+									>
+										{contactName(contact)}
+										{aside ? (
+											<span className="text-muted-foreground"> ({aside})</span>
+										) : null}
+									</button>
+								);
+							})}
+						</span>
+					)}
+				</DetailSheetProperty>
+			</DetailSheetProperties>
+		</DetailSheetSection>
 	);
 }
 
@@ -308,17 +420,11 @@ function DealContacts({ deal }: { deal: Deal }) {
 						<span className="flex min-w-0 items-center gap-2">
 							<PersonAvatar
 								src={contact.imageUrl}
-								name={[contact.firstName, contact.lastName]
-									.filter(Boolean)
-									.join(" ")}
+								name={contactName(contact)}
 								email={contact.email}
 								size="sm"
 							/>
-							<span className="truncate">
-								{[contact.firstName, contact.lastName]
-									.filter(Boolean)
-									.join(" ")}
-							</span>
+							<span className="truncate">{contactName(contact)}</span>
 						</span>
 					</TableCell>
 					<TableCell className="truncate px-3 py-2.5">

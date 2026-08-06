@@ -13,6 +13,7 @@ import {
 } from "@crm/ui/components/select";
 import { SOURCED_VALUE, SourcedValue } from "@crm/ui/components/sourced-value";
 import { Spinner } from "@crm/ui/components/spinner";
+import { Textarea } from "@crm/ui/components/textarea";
 import { cn } from "@crm/ui/lib/utils";
 import { useId, useState } from "react";
 import { PROPERTY_LABEL, PROPERTY_ROW } from "@/components/detail-sheet";
@@ -21,6 +22,10 @@ const ROW = cn(PROPERTY_ROW, "items-center");
 const LABEL = PROPERTY_LABEL;
 const CONTROL =
 	"h-8 w-full justify-start px-2 font-normal hover:border-input hover:bg-muted/40 border border-transparent";
+const BLOCK_CONTROL = cn(
+	CONTROL,
+	"h-auto min-h-16 items-start whitespace-pre-wrap py-2 text-left leading-5",
+);
 
 export function InlineField({
 	label,
@@ -81,6 +86,7 @@ export function InlineField({
 			variant="ghost"
 			size="sm"
 			className={CONTROL}
+			disabled={saving}
 			onClick={() => {
 				setDraft(value ?? "");
 				setEditing(true);
@@ -127,6 +133,76 @@ export function InlineField({
 				{suggestion}
 			</div>
 		</div>
+	);
+}
+
+export function InlineTextArea({
+	label,
+	value,
+	onSave,
+	saving = false,
+	placeholder,
+}: {
+	label: string;
+	value: string | null;
+	onSave: (next: string) => void;
+	saving?: boolean;
+	placeholder?: string;
+}) {
+	const [editing, setEditing] = useState(false);
+	const [draft, setDraft] = useState(value ?? "");
+
+	const commit = () => {
+		setEditing(false);
+		if (draft.trim() !== (value ?? "")) onSave(draft.trim());
+	};
+
+	if (editing) {
+		return (
+			<Textarea
+				aria-label={label}
+				autoFocus
+				value={draft}
+				placeholder={placeholder}
+				onChange={(event) => setDraft(event.target.value)}
+				onBlur={commit}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+						event.preventDefault();
+						commit();
+					}
+					if (event.key === "Escape") {
+						setDraft(value ?? "");
+						setEditing(false);
+					}
+				}}
+			/>
+		);
+	}
+
+	const shown = saving ? draft.trim() : (value ?? "");
+
+	return (
+		<Button
+			variant="ghost"
+			size="sm"
+			aria-label={label}
+			className={BLOCK_CONTROL}
+			disabled={saving}
+			onClick={() => {
+				setDraft(value ?? "");
+				setEditing(true);
+			}}
+		>
+			{saving ? <Spinner /> : null}
+			{shown ? (
+				<span className="min-w-0">{shown}</span>
+			) : (
+				<span className="min-w-0 text-muted-foreground">
+					{placeholder ?? <EmptyCellValue />}
+				</span>
+			)}
+		</Button>
 	);
 }
 

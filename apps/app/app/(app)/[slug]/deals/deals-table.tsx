@@ -162,6 +162,10 @@ export function DealsTable() {
 	];
 
 	const openValueCents = deals.data?.openValueCents;
+	const reportingCurrency = deals.data?.reportingCurrency;
+	const unconverted = deals.data?.unconverted;
+	const uncounted = unconverted?.count ?? 0;
+	const openPipelineCents = openValueCents ?? (uncounted > 0 ? 0 : null);
 
 	return (
 		<DataTable
@@ -186,11 +190,20 @@ export function DealsTable() {
 			onRowClick={(row) => openRecord({ kind: "deal", id: row.id })}
 			empty="No deals match this view."
 			meta={
-				openValueCents === null || openValueCents === undefined ? undefined : (
+				openPipelineCents === null ? undefined : (
 					<span>
 						{deals.data?.total ?? 0} deals ·{" "}
-						<span className="tabular-nums">{formatMoney(openValueCents)}</span>{" "}
+						<span className="tabular-nums">
+							{formatMoney(openPipelineCents, reportingCurrency)}
+						</span>{" "}
 						open pipeline
+						{unconverted && unconverted.count > 0 ? (
+							<span className="text-muted-foreground">
+								{" "}
+								· {unconverted.count} not counted (no{" "}
+								{unconverted.currencies.join(", ")} rate)
+							</span>
+						) : null}
 					</span>
 				)
 			}

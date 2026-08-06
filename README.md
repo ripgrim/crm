@@ -35,10 +35,7 @@
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs/images/overview-dark.png">
-    <img alt="The CRM overview: closed-won and open pipeline, pipeline by stage, deals in progress and overdue tasks" src="./docs/images/overview.png">
-  </picture>
+  <img alt="The companies list with an account open on its Agent tab" src="./docs/images/product-shot.png">
 </p>
 
 ---
@@ -55,12 +52,6 @@ against its own work queue. It decides what to look at next, books its own follo
 spends a research budget, and stops when the budget runs out. Nothing about it is
 request-response: close the browser and it keeps going.
 
-The API deliberately has no intelligence in it at all. NestJS reports that *something
-happened* — a thread was ingested, a company was created, an attendee is unknown — by
-writing a row to a queue. The agent leases that row and decides what it means. A Nest
-service that calls an enrichment API is treated as a bug, and
-[`docs/api.md`](./docs/api.md) explains the outage that made that a rule.
-
 The rule the agent itself never breaks: **nothing about a person is guessed.** No tool
 accepts a confidence score, because a model asked to grade its own certainty will, and
 it will be wrong in the direction that makes it look useful. Tools report what they
@@ -69,44 +60,15 @@ evidence. Strong evidence writes to the record. Weak evidence becomes a suggesti
 human settles. A confidently wrong fact about a customer is worse than a blank field,
 because nobody can tell it is wrong.
 
-It is single-tenant and internal by design. Sign-in is Google, the allow-list is one
-environment variable, and everyone who gets in can see everything. That is the whole
-authorisation model — see [SECURITY.md](./SECURITY.md) before you point it at real
-customer data.
-
 ## Screenshots
 
 <table>
   <tr>
     <td width="50%">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="./docs/images/deals-dark.png">
-        <img alt="Deals list with stage, amount, owner and close date" src="./docs/images/deals.png">
-      </picture>
-      <p align="center"><sub><b>Deals</b> — filters, sort and page live in the URL, so a view is a link.</sub></p>
+      <img alt="Agents that automate your CRM: a composer describing an agent in one sentence, with suggested actions beneath it" src="./docs/images/landing-agents.png">
     </td>
     <td width="50%">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="./docs/images/contacts-dark.png">
-        <img alt="Contacts list with title, email, company and owner" src="./docs/images/contacts.png">
-      </picture>
-      <p align="center"><sub><b>Contacts</b> — most of these were created by the mailbox sync, not typed.</sub></p>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="./docs/images/companies-dark.png">
-        <img alt="Companies list with domain, industry, open pipeline and owner" src="./docs/images/companies.png">
-      </picture>
-      <p align="center"><sub><b>Companies</b> — logo, industry and location arrive on their own.</sub></p>
-    </td>
-    <td width="50%">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="./docs/images/overview-dark.png">
-        <img alt="Overview dashboard" src="./docs/images/overview.png">
-      </picture>
-      <p align="center"><sub><b>Overview</b> — yours or the whole team's, toggled in the URL.</sub></p>
+      <img alt="What it actually does: records fill themselves in, agents that build agents, it books its own follow-ups, and a question box on every record" src="./docs/images/landing-capabilities.png">
     </td>
   </tr>
 </table>
@@ -301,6 +263,7 @@ short version:
 | `AGENT_BRIDGE_SECRET` | Lets a rep talk to the agent from a contact's **Agent** tab. |
 | `REDIS_URL` | A shared cache. Without it, per-instance and in-memory. |
 | `CRON_SECRET` | Guards the Gmail/Calendar sync route. Required to use it. |
+| `CRM_TELEMETRY_DISABLED` | Set to `1` and this install reports nothing. `DO_NOT_TRACK` too. |
 
 ## Tasks
 

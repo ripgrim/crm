@@ -63,6 +63,7 @@ import {
 	composerState,
 	eventsOf,
 	loadThread,
+	offlineThread,
 	type Thread as ThreadState,
 } from "@/lib/agent-session";
 import {
@@ -134,6 +135,7 @@ function LoadedAgentPanel({
 }
 
 const WORKING_POLL_MS = 3000;
+const SETTLED_TTL_MS = 60_000;
 
 function ThreadWithHistory({
 	record,
@@ -146,30 +148,26 @@ function ThreadWithHistory({
 }) {
 	const trpc = useTRPC();
 
-	const archive = useQuery({
-		...trpc.conversations.events.queryOptions({ id: conversation?.id ?? "" }),
-		enabled: conversation !== null,
-		staleTime: Number.POSITIVE_INFINITY,
-	});
-
 	const thread = useQuery<ThreadState>({
 		queryKey: ["agent-thread", conversation?.sessionId],
-		enabled: conversation !== null && !archive.isPending,
-		staleTime: 0,
-		refetchOnMount: "always",
+		enabled: conversation !== null,
+		staleTime: SETTLED_TTL_MS,
 		refetchOnWindowFocus: false,
 		refetchInterval: (query) =>
 			query.state.data?.status === "working" ? WORKING_POLL_MS : false,
 		queryFn: ({ signal }) =>
-			loadThread(
-				conversation?.sessionId ?? "",
-				recordHeader(record),
-				(archive.data ?? []) as never,
-				signal,
-			),
+			loadThread(conversation?.sessionId ?? "", recordHeader(record), signal),
 	});
 
-	if (conversation && (archive.isPending || thread.isPending))
+	const offline = thread.data?.status === "offline";
+
+	const archive = useQuery({
+		...trpc.conversations.events.queryOptions({ id: conversation?.id ?? "" }),
+		enabled: conversation !== null && offline,
+		staleTime: SETTLED_TTL_MS,
+	});
+
+	if (conversation && (thread.isPending || (offline && archive.isPending)))
 		return <Loading />;
 
 	return (
@@ -177,7 +175,9 @@ function ThreadWithHistory({
 			key={thread.data?.status === "working" ? "working" : "settled"}
 			record={record}
 			conversation={conversation}
-			thread={thread.data}
+			thread={
+				offline ? offlineThread((archive.data ?? []) as never) : thread.data
+			}
 			onNewThread={onNewThread}
 		/>
 	);

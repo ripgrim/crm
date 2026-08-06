@@ -53,7 +53,16 @@ export function SalesDashboard({ summary }: { summary: Summary }) {
 		performance,
 		trend,
 		closingThisMonthTotal,
+		reportingCurrency,
+		unconverted,
 	} = summary;
+
+	const money = (cents: number) => formatMoneyCompact(cents, reportingCurrency);
+	const exact = (value: unknown) =>
+		formatMoney(
+			typeof value === "number" ? value : Number(value),
+			reportingCurrency,
+		);
 
 	const hasTrend = trend.some((point) => point.won > 0 || point.created > 0);
 
@@ -76,18 +85,18 @@ export function SalesDashboard({ summary }: { summary: Summary }) {
 			<StatGroup>
 				<StatCard
 					label="Closed won this month"
-					value={formatMoneyCompact(wonThisMonth.valueCents)}
+					value={money(wonThisMonth.valueCents)}
 					delta={changeDelta(
 						wonThisMonth.valueCents,
 						wonPrevMonth.valueCents,
 						"vs. last month",
 					)}
-					description={`${formatCount(wonThisMonth.count, "deal")} · ${formatMoneyCompact(wonPrevMonth.valueCents)} last month`}
+					description={`${formatCount(wonThisMonth.count, "deal")} · ${money(wonPrevMonth.valueCents)} last month`}
 				/>
 				<StatCard
 					label="Open pipeline"
-					value={formatMoneyCompact(pipeline.totalCents)}
-					description={`${formatCount(pipeline.totalDeals, "deal")} in progress · ${formatMoneyCompact(closingThisMonthTotal.valueCents)} due this month`}
+					value={money(pipeline.totalCents)}
+					description={`${formatCount(pipeline.totalDeals, "deal")} in progress · ${money(closingThisMonthTotal.valueCents)} due this month`}
 				/>
 				<StatCard
 					label={`Win rate (${performance.windowDays}d)`}
@@ -107,7 +116,7 @@ export function SalesDashboard({ summary }: { summary: Summary }) {
 					value={
 						performance.avgDealCents === null
 							? "—"
-							: formatMoneyCompact(performance.avgDealCents)
+							: money(performance.avgDealCents)
 					}
 					description={
 						performance.avgCycleDays === null
@@ -116,6 +125,24 @@ export function SalesDashboard({ summary }: { summary: Summary }) {
 					}
 				/>
 			</StatGroup>
+
+			{unconverted.count > 0 ? (
+				<p className="text-muted-foreground text-xs">
+					Every figure above is in {reportingCurrency}.{" "}
+					{formatCount(unconverted.count, "deal")} in{" "}
+					{unconverted.currencies.join(", ")}{" "}
+					{unconverted.count === 1 ? "is" : "are"} not included — there is no
+					rate to convert {unconverted.currencies.length === 1 ? "it" : "them"}{" "}
+					with.{" "}
+					<Link
+						href={workspaceUrl("/settings/currencies")}
+						className="underline hover:no-underline"
+					>
+						Set one
+					</Link>
+					.
+				</p>
+			) : null}
 
 			<DashboardRow split="hero">
 				<ChartPanel
@@ -132,9 +159,7 @@ export function SalesDashboard({ summary }: { summary: Summary }) {
 								variant="gradient"
 								bloom="high"
 								showLegend
-								formatValue={(value) =>
-									formatMoney(typeof value === "number" ? value : Number(value))
-								}
+								formatValue={exact}
 							/>
 						</div>
 					) : (
@@ -151,11 +176,9 @@ export function SalesDashboard({ summary }: { summary: Summary }) {
 							<DonutStat
 								data={stageSlices}
 								height={168}
-								centerValue={formatMoneyCompact(pipeline.totalCents)}
+								centerValue={money(pipeline.totalCents)}
 								centerLabel="open"
-								formatValue={(value) =>
-									formatMoney(typeof value === "number" ? value : Number(value))
-								}
+								formatValue={exact}
 							/>
 							<ul className="flex flex-col px-5 pb-1 md:px-6">
 								{stageSlices.map((slice) => (
@@ -176,7 +199,7 @@ export function SalesDashboard({ summary }: { summary: Summary }) {
 												{slice.count}
 											</span>
 											<span className="w-14 shrink-0 text-right font-medium tabular-nums">
-												{formatMoneyCompact(slice.value)}
+												{money(slice.value)}
 											</span>
 										</Link>
 									</li>

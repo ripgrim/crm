@@ -1,601 +1,252 @@
-# Agent — Rules for working on `apps/agent`
+# Agent — `apps/agent`
 
-The research agent works out who the people in the CRM are. It is an
-[eve](https://eve.dev/docs) app, it is **its own deployment**, and it owns every
-piece of intelligence in this repo.
+An [eve](https://eve.dev/docs) app, its **own deployment**, owning every piece of
+intelligence in this repo. Read with `api.md`, whose first rule is that none of this
+may move into the API. Local dev, the bridge env vars and the manual dispatch command
+are in `docs/setup.md`.
 
-Read this with [`api.md`](./api.md) — whose first rule is that none of this may
-move into the API — and
-[`plan/contact-intelligence-agent.md`](./plan/contact-intelligence-agent.md),
-which is why it is shaped this way.
+**Read the eve guide before writing eve code** —
+`apps/agent/node_modules/eve/docs/README.md` matches the installed version;
+`.agents/skills/eve` is the skill. Guessing typechecks, builds, then misbehaves.
 
-## The framework is the source of truth
+## Model
 
-The complete eve documentation ships inside the package, matching the installed
-version exactly:
+Default `zai/glm-5.2-fast`; `DEFAULT_AGENT_MODEL` in `@crm/db/settings` because the
+agent and the API both need it.
 
-```
-apps/agent/node_modules/eve/docs/README.md
-```
-
-Read the relevant guide there before writing eve code and then check your eve skill knowledge-base shipped in .agents/skills/eve. Guessing at this API is expensive in a specific way: it typechecks, builds, and then behaves differently
-from what you assumed — see the note on principal mapping under [the
-bridge](#the-bridge).
-
-## The model is a setting, not a deploy
-
-The agent runs on **`zai/glm-5.2-fast`** by default, and a rep can change that
-on the settings page without touching the code.
-
-`DEFAULT_AGENT_MODEL` lives in [`@crm/db/settings`](../packages/db/src/settings.ts)
-because two processes need the same answer — the agent, to compile its
-fallback, and the API, to tell the settings page what "Default" resolves to.
-A second copy of that string is a second answer to the question.
-
-- **The choice is a row, not an env var.** `AppSetting` holds one record, and
-  `agent.ts` resolves it through `defineDynamic` on `session.started` — so a
-  change applies to the next session rather than the next deployment, which
-  matters in an install whose owner cannot redeploy. A conversation already
-  open finishes on the model it started with, and that is deliberate: prompt
-  caches are per model, so switching part-way re-ingests the thread at uncached
-  prices.
-- **The window travels with the id.** eve never inherits
-  `modelContextWindowTokens` from the fallback, so `lib/model.ts` always sends
-  it. A model with a smaller window than the default would otherwise be
-  compacted against a number it does not have, and the turn fails at the
-  provider after the context has been assembled and paid for.
-- **A failed read degrades, it does not throw.** No row, no database, a
-  resolver that raises — all of them leave the compiled fallback in force.
-  `lib/model.ts` logs the reason, because the alternative is a session quietly
-  running on a model nobody chose.
-- **The chooser only offers models this agent can run.** Every read the agent
-  has is a tool, so `ModelCatalogService` filters the gateway catalog to
-  language models tagged `tool-use`. An unreachable gateway makes the chooser
-  read-only rather than failing the page, and the id already stored keeps
-  running.
-- **Not a frontier model, on purpose.** The hard part of this job is refusing a
-  plausible-looking wrong answer, and that is enforced by the tools and the
-  evidence model below rather than by model strength. What the job does want is
-  a long window — a company preamble hands over every contact on the account —
-  and answers fast enough that the sheet's Agent tab reads as a conversation.
+- **A row (`AppSetting`), not an env var**, via `defineDynamic` on `session.started`.
+  Open conversations keep their model — prompt caches are per model.
+- **`lib/model.ts` always sends `modelContextWindowTokens`**; eve never inherits it.
+- **A failed read logs and keeps the compiled fallback.** Never throws.
+- **The chooser offers only `tool-use` models** (`ModelCatalogService`).
+- **Not a frontier model, deliberately** — refusing wrong answers is enforced by the
+  tools and evidence model, not model strength.
 
 ## Pictures are copied, never linked
 
-A logo and a profile photograph both arrive as somebody else's URL, and neither
-may be stored as one. LinkedIn signs its CDN URLs with an expiry roughly three
-weeks out; a brand's own CDN is fine until it is a rate limit on a page drawing
-forty logos. Either way the failure is the same and it is the worst shape a
-failure can take here — a picture that works today and is a broken image next
-month, with nothing to connect the two.
+`mirror()` copies bytes to Vercel Blob; the record points at our copy. Lives in
+**`@crm/db/blob`** — writers are `lib/brand-images.ts`, `lib/portrait.ts`,
+`FaviconService`, `ImageMirrorService`, `prisma/seed.ts`.
 
-So `mirror()` copies the bytes into Vercel Blob and the record points at our
-copy.
+- **The key hashes the bytes** — idempotent, and a redesigned mark gets a new URL.
+- **`COMPANY_IMAGE_FIELDS` (`@crm/db/images`) is the one list of picture columns.**
+- **Fetch through `@crm/db/safe-fetch`** — vendor URLs are SSRF vectors.
+- **No `BLOB_READ_WRITE_TOKEN` means no photographs**; logos keep the origin URL.
+- **`isOptimizable` (`@crm/db/images`) is the whole rule**: `next.config.ts`
+  allow-lists only our Blob host (a wildcard makes us an open image proxy), and a
+  mirrored **SVG is still refused**.
+- **Faces are not optimized** — `AvatarImage` skips `<Image>` because Radix probes the
+  URL itself, doubling fetches.
+- **A photograph only comes from a source already tied to this person** —
+  `lib/portrait-sources.ts`: their LinkedIn, their GitHub, their employer's team page,
+  each keyed on an identifier already on the record.
+- **There is no image search by name, and there must never be.** Nobody audits a face.
+  **Guess where to look, never what you will find.**
 
-**It lives in [`@crm/db/blob`](../packages/db/src/blob.ts), not in the agent.**
-It started here, on the reasoning that whoever writes the URL onto the record
-should own fetching the bytes — which is still right, and is exactly why it had
-to move once more than one thing wrote one. There are four writers now, in three
-processes:
+## Two lanes
 
-| Writer | What it copies |
-| --- | --- |
-| `lib/brand-images.ts` (agent) | The four artwork columns on a company |
-| `lib/portrait.ts` (agent) | A contact's photograph |
-| `FaviconService` (API) | The icon a domain's own site serves |
-| `ImageMirrorService` (API) | Anything on an existing row still pointing off-site, including a signed-in user's Google avatar |
+`schedules/dispatch.ts`, split by `DIRECT_KINDS` in `@crm/db/agent-tasks`.
 
-`packages/db/prisma/seed.ts` is the fifth, and it matters more than it sounds:
-demo rows outlive their sources, and a clone seeded today is still open in six
-months.
-
-- **The key carries a hash of the bytes.** That is what makes re-running both
-  idempotent and correct: unchanged artwork lands on the same URL and the record
-  does not move, while a brand that redesigns its mark gets a *new* URL rather
-  than the same one behind a month of CDN cache.
-- **One list of the columns that hold a picture**, `COMPANY_IMAGE_FIELDS` in
-  [`@crm/db/images`](../packages/db/src/images.ts). Four things read it and a
-  column missing from one of them is a picture that is never brought in-house,
-  with nothing anywhere to say so.
-- **It fetches through `@crm/db/safe-fetch`**, which is the favicon resolver's
-  own guard, exported rather than copied. The URL came from a vendor's answer
-  about a domain a rep typed, so a logo link pointing at `169.254.169.254` is a
-  request forgery from inside our network. One copy of that rule, several
-  callers.
-- **No `BLOB_READ_WRITE_TOKEN` means no photographs**, and everything else keeps
-  the origin's URL. The distinction is deliberate: a face comes from a signed
-  CDN link that expires, so storing one would promise a picture that breaks in
-  three weeks, while a logo or a favicon merely stays somebody else's to serve.
-  It is an optional capability like every other, and it is in
-  `lib/capabilities.ts` so the agent is told before it plans.
-- **A mirrored URL is what lets the browser optimize it.** `isOptimizable` in
-  `@crm/db/images` is the whole of that decision and both halves are load
-  bearing: `next.config.ts` allow-lists our Blob host and nothing else, because
-  a wildcard would make the deployment an open image proxy — and a mirrored
-  *SVG* is still refused, because Blob's separate origin is the only reason we
-  store SVG at all, and `/_next/image` would re-serve those bytes from ours.
-  Everything that fails the check renders as the plain `<img>` it always was.
-- **Faces are not optimized, and that is not an oversight.** `EntityLogo` uses
-  `<Image>`; `AvatarImage` deliberately does not. Radix establishes an avatar's
-  load state by probing the URL with its own `new window.Image()`, so an
-  optimized child would request a second, different URL — two fetches per face
-  on a table drawing forty. There is nothing to win for the second one either:
-  every photograph we store arrives pre-thumbnailed by its source
-  (`shrink_100_100`, `=s96-c`), while brand artwork arrives at whatever size the
-  brand publishes.
-- **A photograph is only ever taken from a source already tied to this person.**
-  `lib/portrait.ts` holds the write and `lib/portrait-sources.ts` holds the
-  chain, in order of certainty: their LinkedIn profile, their GitHub account,
-  their employer's own team page. Every one is keyed on an identifier already on
-  the record, so each asks *what does this account look like* rather than *who
-  is this name*.
-- **There is no image search by name, and there must never be.** It is the
-  obvious fourth step and the one that breaks everything else. A search for
-  "Paula Marchetti" returned Brightwater's CEO, an HR lead at Reply and a data
-  engineer in Seattle, all confidently — and those were names, which a rep can
-  read and smell. Nobody audits a face. Guess where to look, never what you will
-  find: a team page is a guess about a URL, and the name printed beside the
-  photograph is the answer.
-- **`get_linkedin_profile` stores the picture itself** the moment it computes
-  `isSamePerson`, in code, rather than asking the model to remember a follow-up
-  call.
-
-### Two lanes: what a rep sees, and what a rep asks for
-
-`schedules/dispatch.ts` drains the queue in **two independent lanes**, and which
-lane a row lands in is decided by one list — `DIRECT_KINDS` in
-[`@crm/db/agent-tasks`](../packages/db/src/agent-tasks.ts).
-
-| | Kinds | How it runs | Per tick |
+| | Kinds | How | Per tick |
 | --- | --- | --- | --- |
-| **Visible** | `brand`, `portrait` | Directly, no `receive`, no model | 60, six at a time |
+| **Visible** | `brand`, `portrait` | Directly — no `receive`, no model | 60, six at a time |
 | **Research** | everything else | One eve session per row | 12 |
 
-**Neither kind in the visible lane has anything in it to decide.** A portrait is
-three reads keyed on identifiers already on the record and a byte copy. A brand
-is a domain in, Context.dev out, map, mirror, write — `lib/brand.ts`, and there
-is not one judgement in the whole path. Routing either through a session buys a
-context window in order to make no decisions with it.
+**Neither visible kind has anything to decide**, and through a session they queued
+behind sixty LLM runs for 25 minutes (`test/lanes.integration.spec.ts`). **The row says
+what the work is; the lane only says whether it needs a conversation.**
 
-Routed through a session it also did not work, twice, the same way. Seven queued
-faces sat behind sixty LLM sessions at five a minute and had not landed twenty
-five minutes later. Then `company-profile` — which is how a logo used to get
-fetched — sat at the *bottom* of one shared queue at priority 10, behind every
-contact task, so `stripe.com` showed as `stripe.com` in a grey square while the
-agent wrote paragraphs about people who worked there.
+**Priority**: `brand` 900 · `portrait` 800 · `workspace` 500 · `requested` 300 ·
+`meeting` 200 · `identify` 100 · `sweep` 50 · `companyProfile` 40 · `recheck` 0. The
+top two are what a rep reads *before* deciding what to open.
 
-Lanes are why that cannot recur. A logo does not queue behind research, because
-it is not in that queue. `test/lanes.integration.spec.ts` pins it: thirty
-`identify` rows do not delay one `brand` row.
+**`claimDue` sorts what it claims** — Postgres does not order `UPDATE … RETURNING` by
+its sub-select's `ORDER BY`.
 
-The schedule still decides nothing, which is the rule it has to keep. The row
-says what the work is; the lane only says whether it needs a conversation.
+### Dispatch on demand
 
-### Priority is what a rep sees first
+`POST /internal/crm/dispatch` drains **both lanes**; `AgentTriggerService.poke()` calls
+it after writing any `AgentTask`.
 
-One table, in `@crm/db/agent-tasks` because the API writes these and the agent
-reads them, and two copies of an ordering is two orderings.
+- **Fire-and-forget, never awaited** — the row is still the message.
+- **Both lanes.** Visible-only made them diverge under `eve dev`, where there is no
+  cron: logos resolved instantly while `identify` sat at `attempts = 0` forever.
+- **Calls the channel's own `send`, not `receive`** — it is already on the crm channel.
+  Principal from `APP_AUTH` (`lib/app-auth.ts`); `taskAuth()` keeps schedule and route
+  from drifting.
+- **`drainAll` collapses** via `collapsing()` (`lib/pool.ts`) — forty new contacts poke
+  forty times, and `claimDue` hands each a disjoint batch. Per-process; cross-process
+  overlap is leases and `FOR UPDATE SKIP LOCKED`.
+- **`AGENT_BRIDGE_SECRET` unset refuses rather than opens.**
 
-| | | |
-| --- | --- | --- |
-| `brand` | 900 | the logo and the real name, on every row of the list |
-| `portrait` | 800 | the face |
-| `workspace` | 500 | who *we* are — every later session opens with it |
-| `requested` | 300 | a rep pressed Research |
-| `meeting` | 200 | a meeting is coming |
-| `identify` | 100 | a new contact |
-| `sweep` | 50 | the sign-in backfill |
-| `companyProfile` | 40 | the written brief |
-| `recheck` | 0 | come back in ninety days |
+### `POST /internal/crm/verify-key`
 
-The top two are the highest on purpose: they are what a rep reads *before*
-deciding whether to open anything, they cost one vendor call each, and they
-finish in seconds. Everything below is worth a wait; a grey square with initials
-in it is not.
+Probes a candidate Context key → `valid`/`invalid`/`unknown`. No session, no model, no
+task row; exists because the API may not call Context.
 
-`claimDue` sorts what it claims. Postgres does **not** order an `UPDATE …
-RETURNING` by the `ORDER BY` of its own sub-select — it returns rows in whatever
-order it touched them — so the priority that chose the batch would otherwise be
-thrown away at the point the batch is handed to a concurrency-limited pool.
+- **The probe is free and chosen to be** — a free-provider address gets a `422` before
+  billable resolution. **Do not point it at a real domain**: ten credits per typo.
+- **`classifyKey` rejects on `401` and nothing else.**
+- **The candidate key, never the stored one.**
 
-### Starting now instead of on the minute
+### Backfills
 
-`POST /internal/crm/dispatch` on the crm channel drains **both lanes** on demand,
-and `AgentTriggerService.poke()` calls it after writing *any* `AgentTask` row.
-Add a company and its logo appears; add a contact and the research starts. You do
-not wait out the cron.
+Sign-in sweep covers records never looked up (10 credits/company);
+`ImageMirrorService` in the same sweep re-hosts off-site pictures (free);
+`backfill:images` fixes enriched records missing only pictures (free).
 
-The poke is **fire-and-forget and never awaited**: the `AgentTask` row is still
-the message, exactly as [`api.md`](./api.md) requires, and the cron still claims
-anything the poke missed. An agent that is down, redeploying or unreachable costs
-sixty seconds, not the work.
-
-It used to run the visible lane only, on the reasoning that a lane needing no
-`receive` and no session auth keeps eve's principal plumbing out of the route.
-That was true and it cost more than it saved, because it made the two lanes
-behave differently in the one environment where the cron does not exist. Under
-`eve dev` the visible lane ran on every poke and the research lane ran *never* —
-so a fresh clone showed every logo resolving within seconds while twenty
-`identify` rows sat at `attempts = 0` and `AgentEvent` stayed empty. Nothing
-errored. A dead lane is very hard to tell from a slow one when the lane beside it
-is visibly working.
-
-So the route starts sessions too. It calls the channel's own `send` rather than
-`receive`, since it is already *on* the crm channel — `receive` is for handing
-work to a different one. The principal comes from `APP_AUTH` in
-[`lib/app-auth.ts`](../apps/agent/agent/lib/app-auth.ts), which is the one copy of
-eve's app principal in this repo: `lib/approval.ts` already hard-coded those three
-strings to decide whether a turn may write unattended, and eve does not export
-`SCHEDULE_APP_AUTH` publicly. `taskAuth()` builds the attributes both callers
-need, so the schedule and the route cannot drift on what a session is told about
-its task. The schedule still passes eve's own `appAuth` where it has it.
-
-**Both callers go through `drainAll`, and it collapses.** The cron ran alone once
-a minute, so overlap was never a question it had to answer; the poke fires per
-enqueued row, and a sync creating forty contacts calls it forty times in a few
-seconds. `claimDue` hands each caller a *disjoint* batch, so without a guard that
-is forty research sessions at once instead of the twelve a minute the cron
-allows — a cost and rate-limit spike triggered by nothing more than a busy inbox.
-`collapsing()` in [`lib/pool.ts`](../apps/agent/agent/lib/pool.ts) keeps one drain
-in flight and folds everything that arrives during it into a single trailing run,
-so work queued mid-drain is still picked up immediately rather than waiting out
-the next tick. It is per-process: cross-process overlap stays the job of leases
-and `FOR UPDATE SKIP LOCKED`, which already handle it.
-
-`AGENT_BRIDGE_SECRET` authorises it, and **unset means the route refuses rather
-than opens**, the same rule the rep bridge follows.
-
-### Checking a key belongs to the person who typed it
-
-`POST /internal/crm/verify-key` is the crm channel's second internal route, and
-it exists because the API is not allowed to call Context.dev and this agent
-already does. It takes a candidate key, probes with it, and answers `valid`,
-`invalid` or `unknown` — no session, no model, no task row, because there is
-nothing here to decide.
-
-- **The probe is free and it is chosen to be.** A brand lookup only bills when
-  it resolves a brand, and a free-provider address is refused with a documented
-  `422` first, so `key-check@gmail.com` authenticates without buying anything.
-  Do not "improve" this to a real domain: that is ten credits every time
-  somebody saves a key, including every time they correct a typo.
-- **`classifyKey` rejects on `401` and nothing else.** Every other status came
-  back *after* the key was accepted, so it says something about the plan, the
-  quota or Context's afternoon — not about the key. Treating a `429` as a bad
-  key would refuse a perfectly good one at the worst possible moment.
-- **It is the candidate key, never the stored one.** `verifyKey` builds a
-  throwaway client from the argument, so checking a new key cannot be confused
-  with exercising the one already saved.
-
-The API's half is `ResearchKeyService`, and an `unknown` answer there saves the
-key anyway — see
-[the environment rules](./environment.md#the-context-key-is-asked-for-not-configured).
-
-### Catching up what was missed
-
-Enrichment is queued when a record is created, so anything created before a
-capability existed never gets it. Two routes, and picking the wrong one is
-expensive:
-
-| | Covers | Cost |
-| --- | --- | --- |
-| Automatic sweep, on sign-in | Records never successfully looked up | Ten credits per company |
-| `ImageMirrorService`, in the same sweep | Rows whose picture is still served from somebody else's origin | Nothing |
-| `bun run --filter=agent backfill:images` | Records already enriched, missing only the *pictures* | Nothing |
-
-The middle row is the one that keeps "every picture is ours" true rather than
-true-since-Tuesday. Every writer copies as it writes, but that says nothing
-about rows written before it did, or rows whose copy failed at the time because
-the origin was down. Left alone those never resolve, and nothing looks broken —
-the pictures render perfectly, off someone else's server, forever. It is capped
-at twenty five rows per table per sweep, so a backlog drains over several
-sign-ins instead of in one burst that looks like a scrape.
-
-**A photo sweep queues anyone with a LinkedIn URL, a GitHub URL, or an employer
-with a website — the three doors the chain knows. The third reads the company's
-team page and costs Context.dev credits, which is why a **finished `portrait`
-task stands that contact down for thirty days**. Most people are not on their
-employer's team page and never will be; without the stand-down every sweep would
-pay to re-read the same sites and find the same nothing, forever. The task's
-`outcome` carries what was actually tried, so a month of paid lookups leaves
-something readable behind.
-
-The sweep has no button, deliberately.** It had one on each list page, and a
-control whose correct usage is "press it whenever you notice blanks" is a chore
-dressed as a feature — a rep has no way of knowing which records predate the
-favicon resolver, and no business fixing that by hand.
-
-The trigger is **signing in**, which is the one moment nothing else in the app
-can see. `packages/auth` owns it, through a Better Auth
-`databaseHooks.session.create.after`; `BackfillService.onModuleInit` subscribes
-via `onSignedIn`. The registry exists because the arrow cannot point the other
-way — `@crm/auth` is a dependency of the API, so it must not import a Nest
-provider — and it means the Next.js app, which imports the package only to read
-sessions, runs none of this.
-
-`BackfillService` has no router at all as a result. Nothing calls it; it is
-subscribed. A five-minute stand-down collapses a burst — a team arriving at
-nine, or Google linking an account mid-sign-in — and `auto()` returns before any
-work starts, so nothing is between a person and their CRM.
-
-It writes `AgentTask` rows and decides nothing, which is what keeps it on the
-API's side of the line in [`api.md`](./api.md); whether a given company is worth
-the credits stays the agent's call. Each pass is capped at 500 rows and the
-leftover is logged rather than rounded away.
-
-**The cap is on the pass, not on each query inside it.** A company sweep has two
-sets of candidates — never successfully looked up, and still missing its
-artwork — and it used to take 500 of each and hand the union to `backfill`, so
-one sign-in could enqueue a thousand `brand` rows at priority 900 and fill the
-[direct lane](#two-lanes-what-a-rep-sees-and-what-a-rep-asks-for) with twice the
-declared budget. The union is deduplicated and cut to 500 before it is queued,
-and `remaining` is counted against the union in one query — the two sets overlap
-heavily, since a company that was never looked up rarely has a logo — so the
-figure the log prints is the work actually left rather than the leftover of one
-of the two halves.
-
-The script is the cheap half: it re-derives from the `CompanyEnrichment.raw`
-payloads already on disk, which is what keeping them was for. Reach for it when
-the records are fine and only the images are missing.
+- **The image sweep keeps "every picture is ours" true**, not true-since-Tuesday.
+  25 rows/table/sweep.
+- **A finished `portrait` task stands that contact down for thirty days** — that third
+  source costs credits and usually finds nothing.
+- **No button, deliberately** — a rep cannot know which records predate a resolver.
+- **The trigger is signing in**, via `databaseHooks.session.create.after` in
+  `packages/auth`; `BackfillService` subscribes with `onSignedIn` and has no router
+  (`@crm/auth` must not import a Nest provider). Five-minute stand-down, and `auto()`
+  returns before work starts.
+- **The 500-row cap is on the pass, not each query in it.** Deduplicate the union, cut
+  to 500, count `remaining` against the union.
 
 ## Evidence, not confidence
 
-**No tool accepts a confidence, a score, or a `sourceUrl` offered as proof.** A
-tool reports what it *observed* — `crm.signature-block`, `github.account-identity`
-— and `lib/evidence.ts` prices it. This is the rule the whole design rests on:
-a model asked to grade its own certainty will, and it will be wrong in the
-direction that makes it look useful.
+**No tool accepts a confidence, a score, or a `sourceUrl` offered as proof.** Tools
+report what they *observed* (`crm.signature-block`, `github.account-identity`) and
+`lib/evidence.ts` prices it. A model asked to grade its own certainty will, and will be
+wrong in the direction that looks useful.
 
-- `lib/evidence.ts` — the weights, the combination rule, the bands.
-- `lib/facts.ts` — the only write path to a contact's fields. Applies at
-  `VERIFIED`, stores a proposal below it, and enforces three things a prompt
-  cannot: never overwrite a human, never re-offer a dismissal, never write
-  without a primary source.
-- The bands are behaviour, not labels. `PROBABLE` means *a rep decides*, and
-  that is a correct outcome — four Marchettis work at Fernhill.
-
-Adding a fact field means adding it to `FIELDS` in `lib/facts.ts` **and** to
-`FACT_COLUMNS` in `apps/api/src/contacts/contacts.service.ts`, which is where an
-accepted proposal writes through.
+- **`lib/facts.ts` is the only write path to a contact's fields.** Applies at
+  `VERIFIED`, proposes below it, and enforces three things a prompt cannot: never
+  overwrite a human, never re-offer a dismissal, never write without a primary source.
+- **Bands are behaviour.** `PROBABLE` means *a rep decides* — a correct outcome.
+- **A new fact field goes in `FIELDS` (`lib/facts.ts`) *and* `FACT_COLUMNS`**
+  (`apps/api/src/contacts/contacts.service.ts`).
 
 ## Optional by default
 
-Every outside source is optional and the agent is designed to run with none.
-`lib/capabilities.ts` is the single place that knows what is set: it prints the
-list at boot, states it in the session instructions so the agent plans around
-what it has, and gives tools a shared "not configured, and retrying will not
-help" result — checked **before** the research budget is charged.
+`lib/capabilities.ts` is the single place that knows what is set: prints it at boot,
+states it in the session instructions, and gives tools a shared "not configured,
+retrying will not help" result — **checked before the research budget is charged**. A
+missing key removes a place to look. **Never an error, never throws.**
 
-A missing key removes a place to look. It is never an error, and it must never
-throw.
+**`capabilities()` is async** because the Context key is a row;
+`capabilitiesFrom()`/`markdownFor()` are the pure halves. `contextDevKey()` is the only
+resolver, and `lib/context-dev.ts` memoises its client on the key string.
 
-**Not all of them are environment variables, which is why `capabilities()` is
-async.** The Context.dev key is a row a rep can set on Settings → General — see
-[the environment rules](./environment.md#the-context-key-is-asked-for-not-configured)
-— so the answer to *what can I use here* now involves a read, and `enabled()`
-and `capabilitiesMarkdown()` are awaited with it. `capabilitiesFrom()` and
-`markdownFor()` are the pure halves, which is what keeps
-`test/capabilities.spec.ts` a unit test rather than something that reports a
-different answer depending on what the developer happens to have saved locally.
+## Budget and scheduling
 
-`contextDevKey()` is the only resolver, and `lib/context-dev.ts` builds its
-client from it rather than from `process.env` — memoised on the key string, so
-replacing the key swaps the client and nothing else does. There is no cache in
-front of the read: a key saved in the browser applies to the next vendor call,
-not the next deploy.
+- `lib/focus.ts` — per-session budget in `defineState`; running out is a normal ending.
+- `lib/tasks.ts` — `claimDue` leases with `FOR UPDATE SKIP LOCKED`.
+- **`schedules/dispatch.ts` is the only schedule and decides nothing.** "Every N
+  minutes, the oldest ten contacts" belongs in a `dueAt`.
+- `tools/schedule_recheck.ts` — its `reason` is shown to the rep.
 
-## Budget, and deciding what to do next
+## Three records, no dead ends
 
-- `lib/focus.ts` holds the per-session budget in `defineState`. Every vendor
-  call charges it. Running out is a normal ending.
-- `lib/tasks.ts` is the work queue. `claimDue` leases rows with
-  `FOR UPDATE SKIP LOCKED`, so two dispatchers take disjoint work and a run that
-  dies frees its row when the lease expires.
-- `schedules/dispatch.ts` is the **only** schedule. It decides nothing: it
-  leases what is due and starts a session per row. Anything that looks like
-  "every N minutes, the oldest ten contacts" belongs in a task's `dueAt`, not in
-  a cron expression.
-- `tools/schedule_recheck.ts` is how the agent books its own next look, and its
-  `reason` is shown to the rep. An agent that cannot say why it will be back in
-  fourteen days does not have a reason, it has a default.
+**Every read hands back the ids of neighbouring records.** Breaking this made the agent
+ask a rep who had a company open, contacts on screen, to paste an email.
 
-## Three records, and no dead ends between them
+| Read (all free) | Hands back |
+| --- | --- |
+| `read_crm_history` | the contact's **company id**, their deals, their colleagues |
+| `read_company_history` | **every contact with id**, deals, threads, meetings, notes |
+| `read_deal_history` | stage clock and history, **people with ids**, last reply |
+| `search_crm` | contacts, companies and deals matching typed text |
 
-The CRM has contacts, companies and deals, and the agent is opened on any of
-them. Every read hands back the **ids** of the neighbouring records, and that
-rule is not decoration — the two worst answers this agent has given both came
-from breaking it:
+**A preamble or tool result naming a record without its id is a bug** — the only
+recovery is asking the human. Ambiguity is fine: four Marchettis is four rows with
+titles. **`search_crm` does no fuzzy matching** — "Marchetti" reaching "Marchetta" is a
+wrong record about a real person.
 
-> I don't have a tool that lists contacts by company, only ones that look up a
-> specific contact by ID or email. Could you paste the contact's name or email
-> address?
+### Preambles
 
-Said to a rep who had the company open, with the contacts on screen. The
-company preamble reported a *count* of contacts, the only read took a
-`contactId`, and the agent correctly concluded it had nowhere to go. And, on a
-contact who plainly worked somewhere, that no company was available: the
-history returned `companyName`, a display string, while every company tool
-takes an id.
+`lib/preamble.ts` varies on **which record** (each names its neighbours with ids and
+points at the read to start from) and **who opened it** — a dispatched task is a
+research pass with a budget, a rep in the sheet is a conversation. Told neither, the
+agent answered a question with a work plan. `taskKind` is the tell.
 
-So:
+`task.ts` is the resolver and owns one side effect: seeding `lib/focus.ts`, without
+which the audit hook files events against nothing.
 
-| Read | Free | Hands back |
-| --- | --- | --- |
-| `read_crm_history` | yes | the contact's **company id**, the deals they are on, their colleagues |
-| `read_company_history` | yes | **every contact with their id**, every deal, the account's threads and meetings, the notes |
-| `read_deal_history` | yes | the stage clock, every stage it moved through, the people on it with ids, the last reply |
-| `search_crm` | yes | contacts, companies and deals matching what a person would type |
+**A fourth record kind** = `sessionPreamble` entry + a read + a `TOOL_VERBS` line
+(`apps/app/lib/agent-transcript.ts`) + a `COPY` entry (`lib/agent-record.ts`).
 
-**A preamble or a tool result that names a record without its id is a bug**,
-because the only recovery available to the agent is to ask the human — which is
-the CRM handing its own join back to the person using it. Ambiguity is
-different, and fine: four Marchettis come back as four rows with their titles,
-and asking which one is a question rather than a chore.
+### Every session knows who *we* are
 
-`search_crm` deliberately does no fuzzy matching. "Northwind" reaching
-"Northwind Savings Group" is useful; "Marchetti" reaching "Marchetta" is a
-wrong record in a CRM, and a wrong record about a real person is the one
-failure this whole design exists to prevent.
+`composeClosing()` puts a **Who we are** block before the capabilities in every
+preamble; `lib/workspace.ts` is the only renderer.
 
-### A session is a conversation, and they are not all the same one
+- **Tiny, enforced by the write path** — `MAX_NARRATIVE` (320) and `MAX_LINE` in
+  `@crm/db/workspace`. It is prompt-cached and precedes every question.
+- **It says what the context is for** — fit, competitor, partner, or nothing — and
+  **never a pitch**, or the model sells our own product back to us.
+- **No profile still gets the name line**, plus *do not guess at what we sell*.
+- **The profile dies with its website** — `readWorkspaceIdentity` returns it only while
+  `website` matches.
+- **Not a `Company` row** — that needs excluding from every list, facet and join. One
+  `WorkspaceProfile` keyed on `WORKSPACE_ID`.
 
-`lib/preamble.ts` builds what a session is told before it speaks, and it varies
-on two axes:
+The pass is a `workspace-profile` task using `web_fetch` (no credits), filed only via
+`write_workspace_profile`, queued by `WorkspaceService.update` on a website change. **A
+finished attempt stands the sweep down for seven days.**
 
-- **Which record.** A person is asked who they are, a company what it does and
-  who we know there, a deal where it stands. Each preamble names that record's
-  neighbours, with ids, and points at the read to start from.
-- **Who opened it.** A dispatched task is a research pass with a budget; a rep
-  in the sheet is a conversation. Told neither, the agent assumed the first,
-  which is how a question got a work plan back. `taskKind` is the tell — the
-  dispatcher sets it and the panel never does.
+## What may be read, and what may leave
 
-The prose lives in `lib/preamble.ts` rather than in `instructions/task.ts` so
-that `test/preamble.integration.spec.ts` can assert the thing that actually
-matters: that a company session can name its own contacts. `task.ts` is the
-resolver, and it owns the one side effect — seeding `lib/focus.ts`, without
-which the audit hook files a session's events against nothing.
-
-Adding a fourth record kind is an entry in `sessionPreamble`, a read beside the
-other three, and a line in `TOOL_VERBS` (`apps/app/lib/agent-transcript.ts`),
-which a test enforces so no tool ever shows a rep a bare slug.
-
-### Every session also knows who *we* are
-
-A research agent that knows everything about the person and nothing about the
-company employing it writes a dossier, not a briefing. Asked about a contact
-before a call it returned six accurate paragraphs on him and could not say what
-any of it meant for us, because nothing had ever told it what we sell.
-
-So `composeClosing()` puts a **Who we are** block in front of the capabilities
-in *every* preamble — contact, company, deal, and the record-less one — and
-`lib/workspace.ts` is the only thing that renders it.
-
-- **It is deliberately tiny**, and the write path enforces that rather than the
-  prompt asking nicely: 320 characters of narrative and one short line each for
-  what we sell, who we sell to, and what we are picked over (`MAX_NARRATIVE` and
-  `MAX_LINE` in [`@crm/db/workspace`](../packages/db/src/workspace.ts)). It rides
-  in front of every question a rep asks, so a page of it would crowd out the
-  record they are actually asking about — and it is prompt-cached, so it is paid
-  for once and then read on every turn forever.
-- **It says what the context is for.** "Say what this record means for us — a
-  fit, a competitor, a partner, or nothing worth saying — and never write a
-  pitch: the rep already knows what we sell." Without that line the model has
-  the facts and no instruction, and starts selling our own product back to us.
-- **A workspace with no profile still gets the name line**, followed by *do not
-  guess at what we sell*. The failure mode of the alternative is a confident
-  invention drawn from our customers' industries.
-- **The profile belongs to a website, and dies with it.**
-  `readWorkspaceIdentity` returns the profile only when its `website` still
-  matches the workspace's. Change the website and the block silently drops to
-  the name line until the new one is researched, rather than describing the
-  company we used to be.
-- **It is not a `Company` row.** A self company would need excluding from every
-  list, facet, sweep and join in the app — the always-the-same-`organizationId`
-  trap from [`api.md`](./api.md) wearing a different hat. It is one row in
-  `WorkspaceProfile`, keyed on `WORKSPACE_ID`, which is why that constant now
-  lives in `@crm/db` and `@crm/auth` re-exports it: the agent has no dependency
-  on the auth package and there must not be a second copy of the string.
-
-The research pass is a `workspace-profile` task with no `contactId` and no
-`companyId`, dispatched like everything else. Its preamble sends the session to
-our own site with `web_fetch` — no vendor credits — and `write_workspace_profile`
-is the only way to file the result. `WorkspaceService.update` queues it when the
-website changes, and the sign-in sweep queues it when a website has no profile
-behind it, which covers the install that filled the settings page in before any
-of this existed and the one whose first attempt failed.
-
-**A finished attempt stands the sweep down for seven days**, the same shape as
-the portrait stand-down above and for the same reason. There is one workspace,
-so a website that cannot be read into a profile — a holding page, a site that
-blocks the fetch — was a `workspace-profile` session queued on *every* sign-in
-sweep for the life of the install, at the highest research priority there is,
-never getting a different answer. Changing the website still queues one
-immediately through `WorkspaceService.update`, so the stand-down only paces the
-retry of a failure, and it is shorter than a contact's thirty days because this
-one row rides in front of every question a rep asks.
-
-## What the agent may read, and what may leave
-
-It may read **everything**, including full email bodies — single-tenant internal
-tool, and a signature block is the best source of a job title there is. The
-boundary is egress, and it is three rules:
+It may read **everything**, including full email bodies — internal single-tenant tool,
+and a signature block is the best source of a job title there is. The boundary is
+egress:
 
 1. No customer text in a third-party query. Derived questions only.
-2. Nothing from a mailbox into `/workspace`. The sandbox has a different
-   lifetime.
+2. Nothing from a mailbox into `/workspace` — different lifetime.
 3. Nothing sensitive logged. Reading is not logging.
 
-`skills/data-boundaries.md` is the agent's copy of this. Keep them in step.
+`skills/data-boundaries.md` is the agent's copy. Keep them in step.
 
-## The sandbox
+## Sandbox
 
-`agent/sandbox/sandbox.ts` turns on `bash`, the file tools, and a `/workspace`,
-with **`deny-all` egress** set on the backend factory so it cannot be forgotten
-per session. That costs nothing: `web_fetch` runs in the app runtime and
-`web_search` at the model provider, so retrieval is unaffected.
+`agent/sandbox/sandbox.ts`: `bash`, file tools, `/workspace`, **`deny-all` egress on
+the backend factory** so it cannot be forgotten per session. Costs nothing —
+`web_fetch` runs in the app runtime, `web_search` at the provider.
 
-**Never give the sandbox `DATABASE_URL`.** CRM access is authored tools in the
-app runtime. A shell with credentials and network is exfiltration-shaped even in
-an internal tool; a shell with neither is a text processor.
+**Never give the sandbox `DATABASE_URL`.** CRM access is authored tools. A shell with
+credentials and network is exfiltration-shaped; with neither it is a text processor.
 
 ## The bridge
 
-The contact sheet's **Agent** tab talks to a running agent. The path:
-
 ```
-browser  →  /eve/v1/*  (same origin, session cookie)
-              + x-crm-contact: the record the rep has open
-         →  apps/app/app/eve/v1/[...path]/route.ts
-              checks the Better Auth session
-              strips the cookie
-              mints a 2-minute HS256 token naming the rep
-              and carrying the contact id
-         →  AGENT_URL/eve/v1/*
-              agent/channels/eve.ts → repFromCrm() verifies it
-              instructions/task.ts reads attributes.contactId
+browser → /eve/v1/*  (same origin, session cookie, x-crm-contact header)
+        → apps/app/app/eve/v1/[...path]/route.ts
+            checks the Better Auth session, strips the cookie,
+            mints a 2-minute HS256 token naming the rep + record
+        → AGENT_URL/eve/v1/* → channels/eve.ts repFromCrm()
+                             → instructions/task.ts reads attributes.contactId
 ```
 
-**The record travels in the token, never in the message.** The panel used to
-prefix everything a rep typed with `About contact <cuid> (Name):` so the agent
-knew what it was looking at, which meant the rep read their own question back
-with plumbing bolted to the front. The claim reaches the agent through the same
-`session.auth.attributes` path the dispatcher uses, so the message stays theirs.
-
-Mounted at `/eve/v1/*` deliberately: that is where `useEveAgent()` looks by
-default, so the hook needs no `host` and there is no CORS and no cross-site
-cookie anywhere in it. It is the same trade the app already makes for the API.
-
-Three things worth knowing before you touch it:
-
-- **The proxy is an enforcement point, not a passthrough.** The agent never sees
-  the session cookie, so if that route did not check the session, nothing
-  downstream would.
-- **eve's `jwtHmac()` helper resolves an HMAC token to
-  `principalType: "service"`** with a namespaced `principalId`. Correct for a
-  machine credential, wrong for a person — and `lib/approval.ts` decides whether
-  to pause for a human by reading exactly those fields, so a rep would have been
-  refused a sensitive write while sitting there watching. `repFromCrm` wraps
-  `verifyJwtHmac` and maps the subject to a real user principal.
-  `test/channel-auth.spec.ts` pins it.
+- **The record travels in the token, never in the message.**
+- **Mounted at `/eve/v1/*`** because that is where `useEveAgent()` looks — no `host`,
+  no CORS, no cross-site cookie.
+- **The proxy is an enforcement point, not a passthrough** — the agent never sees the
+  session cookie, so if that route did not check, nothing would.
+- **eve's `jwtHmac()` resolves to `principalType: "service"`** — wrong for a person,
+  and `lib/approval.ts` reads exactly those fields to decide whether to pause for a
+  human. `repFromCrm` maps the subject to a real user principal
+  (`test/channel-auth.spec.ts`).
 - **`AGENT_BRIDGE_SECRET` unset skips the auth entry rather than opening it.**
-  The panel stops working; the agent keeps running its own schedule. An
-  optional capability's absence must never widen access.
 
-### The panel knows which record it is on
+### The panel
 
-`lib/agent-record.ts` is the single place that maps a record kind to everything
-downstream: the header the panel sends, the claim the proxy mints, the field a
-conversation is filed under, and the questions offered on an empty thread. A
-contact is asked "Who is this person?", a company "What do they do?", a deal
-"Where does this stand?" — offering the first of those on a company is the tell
-that a chat box was bolted on rather than built into the record.
+`lib/agent-record.ts` maps a record kind to everything downstream. The panel's own
+rules — snapshot loading, composer state, thread capture, scrolling — are in
+**`docs/agent-panel.md`**. It lives in the API and is not a breach of rule one:
+listing history decides nothing.
 
-The agent gets the same context: `instructions/task.ts` opens a session with a
-preamble built from the record, so a deal session starts knowing the stage, the
-amount, the close date and who is on it, rather than spending its first two tool
-calls finding out.
+## Continuation tokens are namespaced
 
-Adding a fourth kind is one entry in `COPY` plus a branch in the agent's
-preamble — not four edits in four layers.
+**eve prefixes them with the channel name.** `channels/crm.ts` mints `task:<id>`;
+`session.waiting` returns `crm:task:<id>`. Minting the prefix ourselves meant matching
+against `crm:crm:task:<id>` and returning before `completeTask` — research ran, facts
+were written, sessions looked clean, but **no task reached `finishedAt`**, so contacts
+sat on "Researching" forever. Hidden because the archived event's
+`data.continuationToken` is *un-namespaced* while `channel.continuationToken` is not.
 
 ### Conversations are kept
 
@@ -875,3 +526,6 @@ byte-identical to the one it sent.** Parse for your own marker.
 `bun run --filter=agent test`. The integration specs need `DATABASE_URL` and run
 against a real Postgres, which is the point — "never overwrite a human" is only
 true if the transaction says so.
+**`taskFromToken` keys on the `task:` marker, not a fixed prefix**
+(`test/crm-token.spec.ts`). **A channel handler must not assume the token it receives
+is byte-identical to the one it sent.**

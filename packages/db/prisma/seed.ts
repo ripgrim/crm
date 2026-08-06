@@ -1,7 +1,13 @@
 import { mirror } from "../src/blob";
 import { db } from "../src/client";
+import { DEFAULT_REPORTING_CURRENCY } from "../src/currency";
 import { resolveFavicon } from "../src/favicon";
-import { ActivityType, DealStage } from "../src/generated/prisma/enums";
+import {
+	ActivityType,
+	DealStage,
+	RateSource,
+} from "../src/generated/prisma/enums";
+import { readReportingCurrency, SETTINGS_ID } from "../src/settings";
 
 function makeRandom(seed: number): () => number {
 	let a = seed;
@@ -253,6 +259,14 @@ const CLOSED_STAGES = [
 	DealStage.UNQUALIFIED_TO_BUY,
 ] as const;
 
+const DEAL_DESCRIPTIONS = [
+	"Replacing a spreadsheet-and-Drive evidence process before their first SOC 2 audit. Security owns the decision, finance signs.",
+	"Expansion onto the platform team after the security org went live. Blocked on whether the current contract can be co-termed.",
+	"Inbound from a failed vendor renewal. They want automated evidence collection and one auditor-ready report.",
+	"Their enterprise deals keep stalling on security questionnaires. The buying trigger is the pipeline, not the audit.",
+	"Champion ran the evaluation themselves and wants the agent, not the checklist. Procurement is the long pole.",
+] as const;
+
 const LOST_REASONS = [
 	"Went with an incumbent vendor",
 	"No budget this cycle",
@@ -462,6 +476,85 @@ type SeededDeal = {
 	closed: boolean;
 };
 
+const SEED_RATES: Record<string, number> = {
+	EUR: 1.09,
+	GBP: 1.27,
+	CAD: 0.73,
+	AUD: 0.66,
+	JPY: 0.0067,
+};
+
+const DEAL_CURRENCIES = ["USD", "USD", "USD", "EUR", "GBP", "JPY", "CAD"];
+
+let seedBase = "USD";
+
+async function seedRates(): Promise<number> {
+	const asOf = daysFromNow(-1);
+
+	await db.appSetting.upsert({
+		where: { id: SETTINGS_ID },
+		create: {
+			id: SETTINGS_ID,
+			reportingCurrency: DEFAULT_REPORTING_CURRENCY,
+		},
+		update: {},
+		select: { id: true },
+	});
+
+	seedBase = await readReportingCurrency(db);
+
+	if (seedBase !== "USD") {
+		console.log(
+			`Reporting currency is ${seedBase} — seeding a converted figure only for ` +
+				`deals already in ${seedBase}; the rates cron converts the rest.`,
+		);
+	}
+
+	for (const [quoteCurrency, rate] of Object.entries(SEED_RATES)) {
+		await db.exchangeRate.upsert({
+			where: {
+				baseCurrency_quoteCurrency_source: {
+					baseCurrency: "USD",
+					quoteCurrency,
+					source: RateSource.FETCHED,
+				},
+			},
+			create: {
+				baseCurrency: "USD",
+				quoteCurrency,
+				rate,
+				asOf,
+				source: RateSource.FETCHED,
+				provider: "seed",
+			},
+			update: { rate, asOf, provider: "seed" },
+		});
+	}
+
+	return Object.keys(SEED_RATES).length;
+}
+
+function money(usdAmount: number, currency: string) {
+	const rate = SEED_RATES[currency] ?? 1;
+	const places = currency === "JPY" ? 0 : 2;
+	const amount = Number((usdAmount / rate).toFixed(places));
+
+	const converted =
+		currency === seedBase
+			? { baseAmount: amount, fxRate: 1 }
+			: seedBase === "USD"
+				? { baseAmount: Number((amount * rate).toFixed(2)), fxRate: rate }
+				: null;
+
+	return {
+		amount,
+		currency,
+		baseAmount: converted?.baseAmount ?? null,
+		baseCurrency: converted ? seedBase : null,
+		fxRate: converted?.fxRate ?? null,
+	};
+}
+
 async function seedDeals(
 	companies: { id: string; name: string }[],
 	contacts: SeededContact[],
@@ -495,12 +588,23 @@ async function seedDeals(
 						n === 0
 							? `${company.name} — Comp AI`
 							: `${company.name} — expansion`,
+					description: pick(DEAL_DESCRIPTIONS),
 					companyId: company.id,
 					ownerId,
 					stage,
 					stageChangedAt,
-					amount: integer(6, 90) * 1000,
-					currency: "USD",
+					...(() => {
+						const { amount, currency, baseAmount, baseCurrency, fxRate } =
+							money(integer(6, 90) * 1000, pick(DEAL_CURRENCIES));
+						return {
+							amount,
+							currency,
+							baseAmount,
+							baseCurrency,
+							fxRate,
+							fxRateAt: fxRate === null ? null : daysFromNow(-1),
+						};
+					})(),
 					expectedCloseDate: daysFromNow(
 						closedDaysAgo === null
 							? integer(-10, 75)
@@ -659,6 +763,7 @@ async function seedActivities(
 }
 
 async function main() {
+	const rates = await seedRates();
 	const ownerIds = await seedOwners();
 	const companies = await seedCompanies(ownerIds);
 	const contacts = await seedContacts(companies, ownerIds);
@@ -667,7 +772,7 @@ async function main() {
 
 	console.log(
 		`Seeded ${companies.length} companies, ${contacts.length} contacts, ` +
-			`${deals.length} deals, ${activities} activities.`,
+			`${deals.length} deals, ${activities} activities, ${rates} exchange rates.`,
 	);
 }
 

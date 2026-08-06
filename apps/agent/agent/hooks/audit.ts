@@ -4,12 +4,14 @@ import { currentFocus } from "../lib/focus";
 import { lockAgentRun } from "../lib/run-state";
 import { attribute, purposeOf } from "../lib/session-purpose";
 
+const CUMULATIVE_DELTAS = new Set(["reasoning.appended"]);
+
 export default defineHook({
 	events: {
 		async "*"(event, ctx) {
 			const id = event.meta?.id;
 
-			if (!id) return;
+			if (!id || CUMULATIVE_DELTAS.has(event.type)) return;
 
 			try {
 				const data = ("data" in event ? (event.data ?? {}) : {}) as object;

@@ -5,7 +5,7 @@ const FILES = [".env", ".env.local"] as const;
 
 let loaded = false;
 
-function findWorkspaceRoot(start: string): string | null {
+export function findWorkspaceRoot(start: string): string | null {
 	let directory = resolve(start);
 
 	for (;;) {

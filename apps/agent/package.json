@@ -12,13 +12,14 @@
 		"build": "eve build",
 		"start": "bun scripts/start.ts",
 		"check-types": "tsc --noEmit",
-		"test": "bun test",
+		"test": "CRM_TELEMETRY_DISABLED=1 bun test",
 		"lint": "biome check .",
 		"clean": "rm -rf .turbo .eve node_modules"
 	},
 	"dependencies": {
 		"@crm/db": "workspace:*",
 		"@crm/env": "workspace:*",
+		"@crm/telemetry": "workspace:*",
 		"context.dev": "^2.7.0",
 		"eve": "^0.29.4",
 		"zod": "^4.4.3"

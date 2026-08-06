@@ -30,7 +30,6 @@ export type Thread =
 export async function loadThread(
 	sessionId: string,
 	headers: Record<string, string>,
-	archive: readonly MessageStreamEvent[] = [],
 	signal?: AbortSignal,
 ): Promise<Thread> {
 	try {
@@ -43,9 +42,15 @@ export async function loadThread(
 			session: snapshot.session,
 			events: snapshot.events,
 		} as Thread;
-	} catch {
-		return { status: "offline", events: archive };
+	} catch (error) {
+		if (signal?.aborted) throw error;
+
+		return { status: "offline", events: [] };
 	}
+}
+
+export function offlineThread(events: readonly MessageStreamEvent[]): Thread {
+	return { status: "offline", events };
 }
 
 export function classify(

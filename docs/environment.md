@@ -1,157 +1,55 @@
 # Environment
 
-## One `.env`, at the root of the repo
+Setup, DB commands, Google Cloud and the `vercel env pull` hazard: `docs/setup.md`.
 
-Copy [`.env.example`](../.env.example) to `.env` and fill in the five required
-values. That file is the documentation — every variable the repo reads is in it,
-with a note on what it does, and nothing that is not read is in it.
+## One `.env`, at the repo root
 
-```sh
-cp .env.example .env
-```
+`.env.example` **is the documentation** — every variable the repo reads, with a note,
+and nothing that is not read. `packages/env` walks up to the workspace root and reads
+`.env`, then `.env.local` on top.
 
-It is loaded by [`packages/env`](../packages/env), which walks up from the
-process's working directory to the workspace root and reads `.env`, then
-`.env.local` on top. Every process gets there:
+- **Real environment variables always win** — the loader never overwrites
+  `process.env`, so Vercel/Docker/CI takes precedence.
+- **Never add a per-package `.env`.** Four once existed with duplicate
+  `DATABASE_URL`/`BETTER_AUTH_SECRET`; when they drifted the API minted a cookie the
+  app could not verify and the browser bounced between `/sign-in` and `/` forever.
+- **The root marker is a `package.json` declaring `workspaces`** — stopping at the
+  first `turbo.json` resolves the API's root to `apps/api`.
 
-| Process | How it picks the file up |
-| --- | --- |
-| The NestJS API | `@crm/db` and `@crm/auth` both `import "@crm/env/load"` before reading anything |
-| The Next.js app | `next.config.ts` calls `loadRootEnv()`, then republishes `API_URL` as `NEXT_PUBLIC_API_URL` |
-| The agent | `agent/agent.ts` and `@crm/db` |
-| The Prisma CLI | `packages/db/prisma.config.ts` |
+## Required
 
-**Real environment variables always win.** The loader never overwrites a value
-already present in `process.env`, so a platform's own configuration — Vercel,
-Docker, systemd, CI — takes precedence and the file is purely a local
-convenience. With no `.env` at all the loader is a no-op and each consumer
-reports by name what it is missing.
+`DATABASE_URL`, `BETTER_AUTH_SECRET`, `ALLOWED_SIGN_IN`. Everything else has a
+localhost default or is genuinely optional.
 
-There used to be four files (`apps/api/.env`, `apps/app/.env`,
-`packages/db/.env`, `apps/agent/.env`), three of which had to hold identical
-copies of `DATABASE_URL` and `BETTER_AUTH_SECRET`. Files that must agree are
-files that can disagree, and the failure was not an error: the API would mint a
-session cookie the app could not verify, so the browser bounced between
-`/sign-in` and `/` forever. If you still have those files from an older
-checkout, delete them.
+**`GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`** are the sign-in button *and* the
+Gmail/Calendar sync — optional, so an SSO-only install needn't create a Google project,
+but **set together or not at all** (`packages/auth/src/env.ts` throws on one).
 
-### Finding the root
-
-The marker is a `package.json` that declares `workspaces` — the one thing only
-the root has. Neither obvious alternative works: every package has a
-`package.json`, and `apps/api` and `apps/agent` have their own `turbo.json`. A
-walk that stops at the first `turbo.json` resolves the API's root to
-`apps/api`, reads a file that is not there, and the symptom surfaces three
-frames away as a missing variable. `packages/env/test/root.spec.ts` pins this.
-
-## What is required
-
-Three values, and the API refuses to start without them.
-
-| Variable | Why it has no default |
-| --- | --- |
-| `DATABASE_URL` | `docker compose up -d` starts a Postgres that matches `.env.example` exactly |
-| `BETTER_AUTH_SECRET` | Signs session cookies. `openssl rand -base64 32` |
-| `ALLOWED_SIGN_IN` | The entire authorisation model — see below |
-
-Everything else has a working localhost default or is genuinely optional. That
-is the difference between a clone that runs and a clone that makes you read a
-table of variables first.
-
-### Google is the fourth value, and it is a pair
-
-`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are what a clone starts with, and
-almost every install wants them: they are both the sign-in button and the Gmail
-and Calendar sync. They are nonetheless **optional**, because an install that
-signs in through [its own identity provider](./api.md#sso-is-a-row-not-a-deployment)
-should not have to create a Google Cloud project to do it.
-
-- **They are set together or not at all.** `packages/auth/src/env.ts` throws on
-  one without the other, because half a client is a sign-in button that fails at
-  Google with an error the reader cannot act on.
-- **Neither Google nor a provider is a state the sign-in page reports**, naming
-  the two variables — see [the SSO rules](./api.md#sso-is-a-row-not-a-deployment).
-  It is the one configuration mistake whose audience is the person who can fix
-  it, so it must not present as a blank page.
-- **Without them, Gmail sync is a capability the install does not have**, and
-  Settings → Connections says so rather than offering a button that cannot work.
-
-### `ALLOWED_SIGN_IN`
-
-Who may sign in, comma-separated, each entry either a whole email domain or a
-single address:
-
-```sh
-ALLOWED_SIGN_IN="acme.com"                       # everyone at a workspace
-ALLOWED_SIGN_IN="acme.com,contractor@gmail.com"  # …plus one outsider
-ALLOWED_SIGN_IN="you@gmail.com"                  # a one-person install
-```
-
-Bare addresses exist for the third case: a solo self-hoster on a consumer
-mailbox has no domain to name, and `gmail.com` would be an open door.
-
-One list, read by two things that must never disagree — the sign-in guard and
-the sync's decision about which side of a conversation is external. If they
-drifted, a colleague's address would either be refused at the door or filed as
-a sales lead.
-
-**An empty list fails closed**: nobody signs in until it is set. The other
-choice would be a CRM full of real customer data that any Google account can
-read, and it would look like it was working. It is parsed on demand rather than
-at import, so the Better Auth CLI — which loads `auth.ts` in a process with no
-`.env` — and the tests can both set it themselves.
-
-Live in `packages/auth/src/workspace.ts`.
-
-## The landing page is a flag, and it is off
-
-`IS_MARKETING="true"` serves the landing page in `app/(landing)` at `/`.
-Anything else — unset, empty, `false`, `1` — and a signed-out visitor to the
-root is redirected to `/sign-in`.
-
-It defaults to off because the page markets *this* product. A clone serving it
-is telling a stranger about a CRM that stranger is already running, under
-somebody else's name; and on an internal install there is no stranger to tell,
-only a rep who signed out and wants the sign-in box.
-
-- **Only the literal `true` turns it on**, which is the same shape as
-  `PRISMA_LOG_QUERIES`. A flag with several truthy spellings is a flag that is
-  set and not working.
-- **It decides one thing: what a stranger at `/` is shown.** Anyone signed in is
-  sent to their workspace by the proxy either way, and no other route changes —
-  the landing page's own components are still built and still reachable from a
-  deploy that sets the flag.
-- **The read is live.** `isMarketing()` in `apps/app/lib/env.ts` reads
-  `process.env` per request rather than at import: `proxy.ts` runs in Next's
-  Node runtime, so the value comes from the environment the server is running
-  in, not from the one it was built in. Declared in `apps/app/turbo.json` under
-  `passThroughEnv` for both `dev` and `build`, because Turbo runs in strict env
-  mode.
-
-See [the proxy rules](./api.md#there-is-exactly-one-organization-and-it-is-not-a-tenancy-boundary)
-for where it sits among the other gates.
+**`ALLOWED_SIGN_IN`** — comma-separated whole domains or single addresses (bare
+addresses exist for a solo self-hoster, where `gmail.com` would be an open door). **One
+list, read by the sign-in guard *and* the sync's "which side is external" decision** —
+if they drifted a colleague would be refused at the door or filed as a lead. **An empty
+list fails closed.** Parsed on demand. `packages/auth/src/workspace.ts`.
 
 ## Where things are
 
-`API_URL` and `APP_URL` default to `http://localhost:3001` and
-`http://localhost:3000`. Set them for any real deployment.
+- **`API_URL`** (`:3001`) mints session cookies and serves `/api/auth/*`;
+  `next.config.ts` republishes it as `NEXT_PUBLIC_API_URL`, so one variable does both
+  sides. `BETTER_AUTH_URL` is a legacy fallback.
+- **`APP_URL`** (`:3000`) is also the trusted-origin and `callbackURL` allow-list.
+- **`AUTH_COOKIE_DOMAIN`** only for API and app on different subdomains of one parent.
+- **`AGENT_URL`** is the agent's deployment, server-side only, and **must include the
+  scheme** — validated at boot, or it throws when a task is queued instead.
+- **`AUTH_COOKIE_PREFIX` is `crm`** (`@crm/auth/cookies`), set on **both**
+  `advanced.cookiePrefix` in `auth.ts` and `getSessionCookie(request, { cookiePrefix })`
+  in `proxy.ts` — one alone redirects every signed-in request. Better Auth's default
+  collides with any neighbour on a shared parent domain, silently: sign-in completes,
+  the row is written, every reader resolves `null`. **Changing it signs everybody out.**
 
-- **`API_URL`** is the origin that mints session cookies and serves
-  `/api/auth/*`. `next.config.ts` republishes it as `NEXT_PUBLIC_API_URL`, which
-  is what the browser's auth client and tRPC proxy use — so one variable
-  configures both sides. `BETTER_AUTH_URL` is still read as a fallback because
-  Better Auth's own tooling looks for it, but `API_URL` is the name to use.
-- **`APP_URL`** is where the browser is, and it is also the trusted-origin
-  allow-list: the set of origins allowed to call the API with credentials, and
-  the list Better Auth validates post-sign-in `callbackURL`s against.
-  Comma-separate if the app is genuinely served from more than one origin; the
-  first is canonical. This replaced a separate `AUTH_TRUSTED_ORIGINS`, which
-  could only ever disagree with it.
-- **`AUTH_COOKIE_DOMAIN`** only when the API and the app are on different
-  subdomains of one parent — then `.example.com`, so one cookie covers both. On
-  localhost the shared cookie already works, because cookies ignore ports.
+## `IS_MARKETING` — landing page flag, off by default
 
-### The session cookie is named after this app, not after the library
+`"true"` serves `app/(landing)` at `/`; anything else sends a signed-out visitor to
+`/sign-in`, because the page markets *this* product.
 
 `AUTH_COOKIE_PREFIX` in [`@crm/auth/cookies`](../packages/auth/src/cookies.ts)
 is the literal string `crm`, so the session cookie is
@@ -186,54 +84,44 @@ proxy sends the reader to `/sign-in`, which is where they need to be.
 - **`AGENT_PORT`** defaults the self-hosted Eve process to `2000`, matching
   `AGENT_URL`. A host-provided `PORT` still wins when `AGENT_PORT` is unset.
 
+- **Only the literal `true`** (same shape as `PRISMA_LOG_QUERIES`).
+- **It decides one thing**: what a stranger at `/` sees.
+- **`isMarketing()` (`apps/app/lib/env.ts`) reads per request**, so a config change
+  needs no rebuild. Declared in `apps/app/turbo.json` `passThroughEnv`.
+
 ## Typed, validated env
 
-`apps/api/src/config/env.validation.ts` is a `class-validator` schema run by
-`ConfigModule.forRoot({ validate })`, so the API fails at boot with a named
-error rather than at three in the morning with `undefined`. It lists every
-variable the API reads and nothing else — a variable that exists but is never
-read is a question a self-hoster has to answer for no reason.
+`apps/api/src/config/env.validation.ts` runs via `ConfigModule.forRoot({ validate })`,
+and lists every variable the API reads and nothing else.
 
-Two sharp edges:
-
-- **Validation runs while `AppModule` is being evaluated.** A test that needs to
-  set a variable has to do it before importing that module — see the dynamic
-  `import()` in `apps/api/test/auth.e2e.spec.ts`.
-- **The schema is the API's, not the repo's.** `@crm/auth` and the agent read
-  their own values directly, because they run in processes Nest does not own.
+- **Validation runs while `AppModule` is evaluated** — a test must set variables before
+  importing it (see the dynamic `import()` in `test/auth.e2e.spec.ts`).
+- **The schema is the API's, not the repo's** — `@crm/auth` and the agent read their own.
 
 ## Optional: what the agent can do
 
-Every outside source the agent can reach is optional, and it is designed to run
-with none of them. A missing key removes a place to look; it is never an error.
-
-The company research key is the exception and it is **not in this table**,
-because it is not a variable at all — see
-[the next section](#the-context-key-is-asked-for-not-configured).
+Every outside source is optional and the agent runs with none. A missing key removes a
+place to look; **never an error, never throws**. `agent/lib/capabilities.ts` is the
+single place that knows what is set.
 
 | Variable | What it adds |
 | --- | --- |
-| `PERPLEXITY_API_KEY` | Open-web research with citations, and the search that finds a LinkedIn slug |
-| `RAPIDAPI_KEY` | LinkedIn profiles via LinkDAPI — name, title, employer, tenure |
-| `GITHUB_TOKEN` | Raises the GitHub rate limit from 60/hour when matching profiles |
-| `BLOB_READ_WRITE_TOKEN` | Mirrors every logo and profile picture into Vercel Blob rather than linking them. Read by the API and the seed too — see below |
-| `AI_GATEWAY_API_KEY` | The model. Not needed on Vercel, where OIDC handles it |
-| `AGENT_BRIDGE_SECRET` | Lets a rep talk to the agent from the contact sheet — [the bridge](./agent.md#the-bridge) |
+| `PERPLEXITY_API_KEY` | Open-web research with citations; finds a LinkedIn slug |
+| `RAPIDAPI_KEY` | LinkedIn profiles via LinkDAPI |
+| `GITHUB_TOKEN` | Raises the GitHub rate limit from 60/hour |
+| `BLOB_READ_WRITE_TOKEN` | Mirrors logos and photos into Blob |
+| `AI_GATEWAY_API_KEY` | The model. Not needed on Vercel (OIDC) |
+| `AGENT_BRIDGE_SECRET` | The rep-facing Agent panel — see `agent.md` |
 
-`apps/agent/agent/lib/capabilities.ts` is the single place that knows which are
-set. It prints the list at startup, states it in the session instructions so the
-agent plans around what it actually has, and gives the tools a shared
-"not configured, and retrying will not help" result — checked *before* the
-research budget is charged, so an install without a key does not pay for the
-discovery on every contact.
+`BLOB_READ_WRITE_TOKEN` is also in `env.validation.ts` and `apps/api/turbo.json`
+because the API and the seed write pictures too. The Next.js app is deliberately
+excluded — recognising our URL for the image optimizer needs no token.
 
 ### The Context key is asked for, not configured
 
-**`CONTEXT_DEV_API_KEY` is not a variable in this repo, and adding one back
-would be a second answer to a question that already has one.** Nothing reads it
-— not `.env.example`, not `env.validation.ts`, not any `turbo.json`. The key
-lives in `AppSetting` beside the agent's model, it is asked for at
-`/onboarding/research`, and **Settings → General** changes it afterwards.
+**`CONTEXT_DEV_API_KEY` is not a variable here and must not become one.** The key lives
+in `AppSetting`, is asked for at `/onboarding/research`, and changes on Settings →
+General — an admin who cannot redeploy cannot set a variable.
 
 Same reason as [SSO](./api.md#sso-is-a-row-not-a-deployment): an admin who
 cannot redeploy cannot set an environment variable. It goes further than SSO
@@ -313,58 +201,69 @@ favicon a domain serves, and the Google avatar of anyone who signs in — and
 the image optimizer, and recognising one needs no token. See
 [the agent's picture rules](./agent.md#pictures-are-copied-never-linked).
 
+- **An install that had the variable is asked again**: no migration, no fallback, and
+  **the gate cannot be dismissed**.
+- **Nothing is lost while waiting.** A keyless `brand` task settles `SKIPPED` *before*
+  anything marks the row `RUNNING`, and `settle` only overwrites `RUNNING` — so the
+  company stays `PENDING`, which the sweep re-queues
+  (`test/keyless-brand.integration.spec.ts`).
+- **Saving the key runs the company sweep immediately** (fire-and-forget).
+- **`readContextDevKey` (`@crm/db/settings`) is the only reader**, read live with no
+  cache. An unreadable database is a capability that is off, not an exception.
+- **The key is never read back** — only whether one is set, and its last four.
+- **The agent checks it, not the API** (a vendor client in the API is a bug):
+  `settings.setResearchKey` calls `POST /internal/crm/verify-key` and writes unless the
+  answer is *invalid*. **`401` is the only answer meaning the key is wrong**, and **a
+  check that cannot be made is not a failed check** — `unknown` saves anyway and logs it
+  unverified.
+
 ## Gmail and Calendar sync
 
-Always on. Same OAuth client, same callback — the two read-only scopes are added
-to the existing Google provider rather than to a second one, so there is no
-extra redirect URI to register.
+Always on, on the existing Google provider, so there is no extra redirect URI. Scopes
+are requested at sign-in and gated by `requireGoogleAccess()`, because granular consent
+lets a user untick one and still sign in.
 
-The scopes are requested **at sign-in** and are a condition of using the CRM
-*for the person who signed in with Google*: `requireGoogleAccess()` gates the
-app shell on what Google actually granted, because granular consent lets a user
-untick a scope and still complete sign-in. Anyone missing either scope is sent
-to `/grant-access` to re-consent.
+**An SSO rep is not gated** — `needsGoogleGrant` (`@crm/auth`) walls only an account
+whose *sole* sign-in row is Google. It cannot be "has the scopes": an SSO rep has no
+Google account to grant on, and `revoke()` keeps the `account` row, so trying the
+optional feature and revoking would lock them out. They connect from Settings →
+Connections, posting the same `linkSocial` call.
 
-**Someone who signed in through an identity provider is not gated**, and the
-distinction is the whole of `needsGoogleGrant` in
-[`@crm/auth`](../packages/auth/src/scopes.ts): the wall applies to an account
-whose only sign-in row is `google`. Two reasons it cannot be "does this person
-have the scopes".
+**Sync is forward-only** — Gmail records the current `historyId` on its first pass and
+imports nothing; Calendar reads from `now`.
 
-- **An SSO rep has no Google account to grant them on.** Sending them to
-  `/grant-access` is sending them to a page whose only other button is *sign
-  out* — a locked door with a sign on it, on an install that may have no Google
-  client at all.
-- **Linking Gmail must not become a trap.** An SSO rep who connects Google and
-  later revokes it would, under a scopes-only rule, be locked out of the CRM by
-  having tried the optional feature. `revoke()` clears the tokens and keeps the
-  `account` row, so that row is exactly what a scopes-only rule would trip over.
+**`CRON_SECRET`** (min 16 chars) guards `POST /internal/sync/google` and
+`/internal/sync/rates`; both **fail closed when unset**. **Crons live in
+`apps/api/vercel.json`** — Google `*/5 * * * *`, rates daily. Minute-level schedules
+need a Pro plan; on Hobby it silently becomes daily.
 
-They connect it from **Settings → Connections** instead, which posts the same
-`linkSocial` call `/grant-access` does — one write path, two doors. The card
-tells the three states apart, because they need three different sentences: no
-Google client on the install, a client but no linked account, and a linked
-account that has stopped working.
+Deliberate absences: **no `GOOGLE_SYNC_ENABLED`** (a switch that can disable a mandatory
+feature is only ever wrong), **no `GOOGLE_WORKSPACE_DOMAIN`** (`ALLOWED_SIGN_IN` already
+says who is internal — two sources is how a colleague becomes a lead), **no
+`GMAIL_BACKFILL_DAYS`**, **no rate provider variable**.
 
-**Sync is forward-only.** Nothing from before a mailbox was first seen is
-imported: Gmail records the current `historyId` on its first pass and imports
-nothing, and Calendar reads from `now` onwards.
+## Telemetry is on, and turning it off is one variable
 
-| Variable | Required | Notes |
-| --- | --- | --- |
-| `CRON_SECRET` | in deployed environments | Bearer guard on `POST /internal/sync/google`. Vercel sends it automatically as `Authorization: Bearer $CRON_SECRET`. Minimum 16 characters; the route **fails closed** if unset, so locally the cron simply never runs. |
+`CRM_TELEMETRY_DISABLED="1"` — or `DO_NOT_TRACK=1`, honoured identically — and nothing
+is sent. No client is constructed, so there is no queue waiting to flush later.
 
-The absences are deliberate:
+- **Server side only**, `posthog-node` in the API and the agent. **`posthog-js`
+  appears once, on the `trycrm.ai` landing page**, and nowhere a record can be
+  reached: autocapture on a CRM would lift contact names and deal amounts out of
+  somebody else's database. That one import is gated on
+  `window.location.hostname`, not on `IS_MARKETING` — turning the landing page on
+  for your own domain never loads it. `docs/telemetry.md`.
+- **There is no variable for the destination.** The project key and host are
+  constants in `packages/telemetry/src/project.ts`. A `phc_` key is write-only —
+  it can send events and read nothing back — so making it configurable would
+  only imply it were a secret. Edit the constants to point somewhere else.
+- **The install ID is a row, not a file** — `install`, one row, UUID written by
+  the migration. Vercel's filesystem is ephemeral, so `~/.crm/telemetry-id`
+  would count containers.
+- Declared in `env.validation.ts` as optional, like everything else here. Every
+  event and the never-sent list are in **`docs/telemetry.md`**.
 
-- **No `GOOGLE_SYNC_ENABLED`.** A feature flag earns its keep when it gates
-  something that can genuinely be absent — `PERPLEXITY_API_KEY` does, because
-  without a key there is no call to make. Sync has everything it needs the
-  moment the app boots. A switch that can turn off a mandatory feature,
-  defaulting to off, is a switch that is only ever wrong.
-- **No `GOOGLE_WORKSPACE_DOMAIN`.** `ALLOWED_SIGN_IN` already says who is
-  internal, and it is seeded into the sync's "us" set alongside the `User`
-  table. Two sources for one fact is how a colleague becomes a lead.
-- **No `GMAIL_BACKFILL_DAYS`.** There is no backfill.
+## Not env vars
 
 Two things to do in Google Cloud before this works:
 
@@ -449,3 +348,8 @@ way.
 
 Generate your own secret. Never reuse one from an example file, a tutorial, or
 another environment: `openssl rand -base64 32`.
+
+- **Cache TTL** — `DEFAULT_TTL_MS` (60s) in `cache.module.ts`; `CACHE_TTL_MS` overrides.
+- **Redis** — optional; without `REDIS_URL` the cache is per-instance in-memory, which
+  is wrong for multi-instance.
+- **Sign-in method** — Google is in code; an IdP is a row (SSO, in `api.md`).

@@ -16,6 +16,7 @@
 		"@crm/auth": "workspace:*",
 		"@crm/db": "workspace:*",
 		"@crm/env": "workspace:*",
+		"@crm/telemetry": "workspace:*",
 		"@crm/ui": "workspace:*",
 		"@pierre/diffs": "^1.2.12",
 		"@pierre/trees": "^1.0.0-beta.5",
@@ -29,6 +30,7 @@
 		"next": "16.3.0",
 		"next-themes": "^0.4.6",
 		"nuqs": "^2.8.9",
+		"posthog-js": "^1.413.2",
 		"react": "19.2.4",
 		"react-dom": "19.2.4",
 		"sonner": "^2.0.7"

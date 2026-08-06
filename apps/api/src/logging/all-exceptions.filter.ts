@@ -1,3 +1,4 @@
+import { apiError } from "@crm/telemetry";
 import {
 	type ArgumentsHost,
 	Catch,
@@ -51,11 +52,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
 				payload,
 				exception instanceof Error ? exception.stack : undefined,
 			);
+
+			apiError({ error: exception, route: routePattern(request), status });
 			return;
 		}
 
 		this.logger.debug(payload);
 	}
+}
+
+function routePattern(request: Request): string | null {
+	const route = (request as { route?: { path?: unknown } }).route;
+	return typeof route?.path === "string" ? route.path : null;
 }
 
 function describe(exception: unknown): string {

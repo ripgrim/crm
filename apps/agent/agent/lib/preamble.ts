@@ -230,6 +230,7 @@ export async function dealPreamble(
 		where: { id: dealId },
 		select: {
 			name: true,
+			description: true,
 			stage: true,
 			amount: true,
 			currency: true,
@@ -280,6 +281,9 @@ export async function dealPreamble(
 		deal.lastActivityAt
 			? `Last touched ${deal.lastActivityAt.toDateString()}.`
 			: "Nothing has happened on it yet.",
+		...(deal.description
+			? [`The rep's own description of it: "${deal.description}"`]
+			: []),
 		people ? `People on it: ${people}` : "Nobody is attached to it yet.",
 		"",
 		opening(

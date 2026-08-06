@@ -102,6 +102,10 @@ export class EnvironmentVariables {
 	@IsOptional()
 	@IsString()
 	AGENT_BRIDGE_SECRET?: string;
+
+	@IsOptional()
+	@IsString()
+	CRM_TELEMETRY_DISABLED?: string;
 }
 
 export function validateEnv(

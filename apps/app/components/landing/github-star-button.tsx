@@ -1,11 +1,19 @@
+"use client";
+
 import GitHubLogo from "@crm/ui/components/brand-logos/github";
 import { Button } from "@crm/ui/components/button";
+import { type CtaLocation, captureLanding } from "./analytics";
 import { REPO_STARS, REPO_URL } from "./links";
 
-export function GitHubStarButton() {
+export function GitHubStarButton({ location }: { location: CtaLocation }) {
 	return (
 		<Button variant="outline-ghost" size="xl" asChild>
-			<a href={REPO_URL} target="_blank" rel="noreferrer">
+			<a
+				href={REPO_URL}
+				target="_blank"
+				rel="noreferrer"
+				onClick={() => captureLanding("github_star_clicked", location)}
+			>
 				<GitHubLogo data-icon="inline-start" className="size-[15px]" />
 				Star on GitHub
 				<span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />

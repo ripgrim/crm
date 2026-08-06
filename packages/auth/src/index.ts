@@ -3,6 +3,7 @@ export { AUTH_COOKIE_PREFIX } from "./cookies";
 export { isGoogleConfigured } from "./env";
 export {
 	canChangeRole,
+	canManageCurrency,
 	canRenameWorkspace,
 	DEFAULT_WORKSPACE_NAME,
 	ensureWorkspaceMembership,

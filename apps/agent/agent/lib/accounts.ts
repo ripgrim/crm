@@ -270,6 +270,7 @@ export type DealHistory = {
 	deal: {
 		id: string;
 		name: string;
+		description: string | null;
 		stage: string;
 		open: boolean;
 		daysInStage: number;
@@ -313,6 +314,7 @@ export async function readDealHistory(
 		select: {
 			id: true,
 			name: true,
+			description: true,
 			stage: true,
 			stageChangedAt: true,
 			amount: true,
@@ -419,6 +421,7 @@ export async function readDealHistory(
 		deal: {
 			id: deal.id,
 			name: deal.name,
+			description: deal.description,
 			stage: deal.stage,
 			open: isOpen(deal.stage),
 			daysInStage: daysSince(deal.stageChangedAt, now),

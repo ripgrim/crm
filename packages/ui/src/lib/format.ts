@@ -14,11 +14,32 @@ function displayCurrencyCode(currency: string): string {
 		: "USD";
 }
 
+const currencyDigits = new Map<string, number>();
+
+function fractionDigits(code: string): number {
+	const cached = currencyDigits.get(code);
+	if (cached !== undefined) return cached;
+
+	const digits =
+		new Intl.NumberFormat("en-US", {
+			style: "currency",
+			currency: code,
+		}).resolvedOptions().maximumFractionDigits ?? 2;
+
+	currencyDigits.set(code, digits);
+	return digits;
+}
+
 export function formatMoney(cents: number, currency = "usd"): string {
-	return new Intl.NumberFormat("en-US", {
+	const code = displayCurrencyCode(currency);
+	const whole = cents % 100 === 0;
+	const digits = fractionDigits(code);
+
+	return new Intl.NumberFormat(undefined, {
 		style: "currency",
-		currency: displayCurrencyCode(currency),
-		minimumFractionDigits: cents % 100 === 0 ? 0 : 2,
+		currency: code,
+		minimumFractionDigits: whole ? 0 : Math.min(2, digits),
+		maximumFractionDigits: whole ? 0 : digits,
 	}).format(cents / 100);
 }
 

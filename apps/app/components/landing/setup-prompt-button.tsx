@@ -5,6 +5,7 @@ import Copy from "@carbon/icons-react/es/Copy";
 import ClaudeLogo from "@crm/ui/components/brand-logos/claude";
 import { Button } from "@crm/ui/components/button";
 import { useState } from "react";
+import { type CtaLocation, captureLanding } from "./analytics";
 
 const SETUP_PROMPT =
 	"Set up trycompai/crm — install the dependencies, start Postgres, create my .env, and tell me which keys I still need.";
@@ -14,11 +15,12 @@ const SETUP_PROMPT =
  * where a "Get started" would, because on a repo you fork rather than sign up
  * for, taking the prompt is what getting started means.
  */
-export function SetupPromptButton() {
+export function SetupPromptButton({ location }: { location: CtaLocation }) {
 	const [copied, setCopied] = useState(false);
 
 	async function copy() {
 		await navigator.clipboard.writeText(SETUP_PROMPT);
+		captureLanding("setup_prompt_copied", location);
 		setCopied(true);
 		setTimeout(() => setCopied(false), 2000);
 	}

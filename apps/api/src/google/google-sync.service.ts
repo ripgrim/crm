@@ -1,3 +1,4 @@
+import { syncError } from "@crm/telemetry";
 import { Injectable, Logger } from "@nestjs/common";
 import { CalendarSyncService } from "./calendar-sync.service";
 import { GmailSyncService } from "./gmail-sync.service";
@@ -78,6 +79,8 @@ export class GoogleSyncService {
 					},
 					error instanceof Error ? error.stack : String(error),
 				);
+
+				syncError({ error, source: row.source });
 			}
 		}
 

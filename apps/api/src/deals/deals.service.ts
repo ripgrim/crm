@@ -5,6 +5,7 @@ import {
 	type Prisma,
 	Prisma as PrismaNamespace,
 } from "@crm/db";
+import { normalizeCurrency } from "@crm/db/currency";
 import {
 	BadRequestException,
 	Injectable,
@@ -15,7 +16,13 @@ import {
 	ActivityStampService,
 	type StampTargets,
 } from "../crm/activity-stamp.service";
-import { fromCents, toCents } from "../crm/values";
+import {
+	blankToNull,
+	decimalFromCents,
+	fromCents,
+	toCents,
+} from "../crm/values";
+import { ConversionService } from "../currency/conversion.service";
 import { InjectDatabase } from "../database/database.constants";
 import {
 	countsByKey,
@@ -66,7 +73,7 @@ const SORTABLE: Record<
 	name: (dir) => [{ name: dir }],
 	company: (dir) => [{ company: { name: dir } }, { name: "asc" }],
 	stage: (dir) => [{ stage: dir }, { expectedCloseDate: "asc" }],
-	amount: (dir) => [{ amount: dir }],
+	amount: (dir) => [{ baseAmount: { sort: dir, nulls: "last" } }],
 	expectedCloseDate: (dir) => [{ expectedCloseDate: dir }],
 	createdAt: (dir) => [{ createdAt: dir }],
 	owner: (dir) => [{ owner: { name: dir } }, { name: "asc" }],
@@ -80,44 +87,52 @@ export class DealsService {
 	constructor(
 		@InjectDatabase() private readonly db: Db,
 		private readonly stamp: ActivityStampService,
+		private readonly conversion: ConversionService,
 	) {}
 
 	async list(input: DealListInput) {
 		const where = this.buildWhere(input);
 		const { skip, take } = paginate(input);
 
-		const [rows, total, facetCounts, openValue] = await Promise.all([
-			this.db.deal.findMany({
-				where,
-				skip,
-				take,
-				orderBy: resolveOrderBy(input, SORTABLE, [{ createdAt: "desc" }]),
-				select: {
-					id: true,
-					name: true,
-					stage: true,
-					amount: true,
-					currency: true,
-					expectedCloseDate: true,
-					closedAt: true,
-					company: { select: COMPANY_SELECT },
-					owner: { select: OWNER_SELECT },
-					lastActivityAt: true,
-					createdAt: true,
-				},
-			}),
-			this.db.deal.count({ where }),
-			this.facetCounts(input),
-			this.db.deal.aggregate({
-				where: { ...where, stage: { in: [...OPEN_DEAL_STAGES] } },
-				_sum: { amount: true },
-			}),
-		]);
+		const openWhere = { ...where, stage: { in: [...OPEN_DEAL_STAGES] } };
+		const base = await this.conversion.reportingCurrency();
+
+		const [rows, total, facetCounts, openValue, unconverted] =
+			await Promise.all([
+				this.db.deal.findMany({
+					where,
+					skip,
+					take,
+					orderBy: resolveOrderBy(input, SORTABLE, [{ createdAt: "desc" }]),
+					select: {
+						id: true,
+						name: true,
+						stage: true,
+						amount: true,
+						currency: true,
+						baseAmount: true,
+						expectedCloseDate: true,
+						closedAt: true,
+						company: { select: COMPANY_SELECT },
+						owner: { select: OWNER_SELECT },
+						lastActivityAt: true,
+						createdAt: true,
+					},
+				}),
+				this.db.deal.count({ where }),
+				this.facetCounts(input),
+				this.db.deal.aggregate({
+					where: { AND: [openWhere, this.conversion.countedWhere(base)] },
+					_sum: { baseAmount: true },
+				}),
+				this.conversion.unconverted(openWhere),
+			]);
 
 		return {
 			rows: rows.map(
 				({
 					amount,
+					baseAmount,
 					expectedCloseDate,
 					closedAt,
 					lastActivityAt,
@@ -126,6 +141,7 @@ export class DealsService {
 				}) => ({
 					...row,
 					amountCents: toCents(amount),
+					baseAmountCents: toCents(baseAmount),
 					expectedCloseDate: expectedCloseDate?.toISOString() ?? null,
 					closedAt: closedAt?.toISOString() ?? null,
 					lastActivityAt: lastActivityAt?.toISOString() ?? null,
@@ -134,8 +150,14 @@ export class DealsService {
 			),
 			total,
 			facetCounts,
-			openValueCents: toCents(openValue._sum.amount),
-		} satisfies ListResult<unknown> & { openValueCents: number | null };
+			openValueCents: toCents(openValue._sum.baseAmount),
+			reportingCurrency: base,
+			unconverted,
+		} satisfies ListResult<unknown> & {
+			openValueCents: number | null;
+			reportingCurrency: string;
+			unconverted: { count: number; currencies: string[] };
+		};
 	}
 
 	async byId(id: string) {
@@ -144,10 +166,14 @@ export class DealsService {
 			select: {
 				id: true,
 				name: true,
+				description: true,
 				stage: true,
 				stageChangedAt: true,
 				amount: true,
 				currency: true,
+				baseAmount: true,
+				fxRate: true,
+				fxRateAt: true,
 				expectedCloseDate: true,
 				closedAt: true,
 				closedReason: true,
@@ -176,11 +202,15 @@ export class DealsService {
 			throw new NotFoundException(`No deal with id ${id}.`);
 		}
 
-		const { contacts, amount, ...rest } = deal;
+		const { contacts, amount, baseAmount, fxRate, fxRateAt, ...rest } = deal;
 
 		return {
 			...rest,
 			amountCents: toCents(amount),
+			baseAmountCents: toCents(baseAmount),
+			reportingCurrency: await this.conversion.reportingCurrency(),
+			fxRate: fxRate?.toNumber() ?? null,
+			fxRateAt: fxRateAt?.toISOString() ?? null,
 			stageChangedAt: deal.stageChangedAt.toISOString(),
 			expectedCloseDate: deal.expectedCloseDate?.toISOString() ?? null,
 			closedAt: deal.closedAt?.toISOString() ?? null,
@@ -194,6 +224,14 @@ export class DealsService {
 		const closed = isClosedStage(stage);
 		const now = new Date();
 
+		const currency = normalizeCurrency(
+			input.currency ?? (await this.conversion.reportingCurrency()),
+		);
+		const fx = await this.conversion.dealFields(
+			decimalFromCents(input.amountCents),
+			currency,
+		);
+
 		try {
 			const deal = await this.db.deal.create({
 				data: {
@@ -204,7 +242,8 @@ export class DealsService {
 					stageChangedAt: now,
 					closedAt: closed ? now : null,
 					amount: fromCents(input.amountCents),
-					currency: input.currency ?? "USD",
+					currency,
+					...fx,
 					expectedCloseDate: parseDate(input.expectedCloseDate),
 				},
 				select: { id: true, name: true, companyId: true },
@@ -222,6 +261,10 @@ export class DealsService {
 		const data: Prisma.DealUpdateInput = {};
 
 		if (input.name !== undefined) data.name = input.name.trim();
+		if (input.description !== undefined) {
+			data.description =
+				input.description === null ? null : blankToNull(input.description);
+		}
 		if (input.companyId !== undefined) {
 			data.company = { connect: { id: input.companyId } };
 		}
@@ -231,9 +274,33 @@ export class DealsService {
 		if (input.amountCents !== undefined) {
 			data.amount = fromCents(input.amountCents);
 		}
-		if (input.currency !== undefined) data.currency = input.currency;
+		if (input.currency !== undefined) {
+			data.currency = normalizeCurrency(input.currency);
+		}
 		if (input.expectedCloseDate !== undefined) {
 			data.expectedCloseDate = parseDate(input.expectedCloseDate);
+		}
+
+		if (input.amountCents !== undefined || input.currency !== undefined) {
+			const current = await this.db.deal.findUnique({
+				where: { id },
+				select: { amount: true, currency: true },
+			});
+
+			if (!current) {
+				throw new NotFoundException(`No deal with id ${id}.`);
+			}
+
+			const amount =
+				input.amountCents !== undefined
+					? decimalFromCents(input.amountCents)
+					: current.amount;
+			const currency =
+				input.currency !== undefined
+					? normalizeCurrency(input.currency)
+					: normalizeCurrency(current.currency);
+
+			Object.assign(data, await this.conversion.dealFields(amount, currency));
 		}
 
 		try {

@@ -1,40 +1,48 @@
-# Strict rules - Always review before starting any work
+# Strict rules — review before starting any work
 
-You should always check and see if there are any relevant skill files you should review before starting a task e.g. if you're working on better-auth, always review the better auth best practice skill - if you're working on prisma, review your prisma-database-setup skill.
+**Read the doc for the area you are touching before you touch it.** The table
+below is the whole index. These are plain paths, not imports: they are not in your
+context until you read them, and the rules in them are not optional.
 
-Please check below, if you're working on anything related review the rules and let the user know you've read them:
+| Working on | Read first |
+| --- | --- |
+| Anything in `apps/api` — tRPC, auth, logging, sync, deletes, caching | `docs/api.md` |
+| `apps/agent` — the eve research agent, tools, tasks, dispatch | `docs/agent.md` |
+| `.env`, configuration, which variables exist and why | `docs/environment.md` |
+| UI in `apps/app` or `packages/ui` | `docs/design.md` (below) |
+| Deal amounts, totals, charts, exchange rates | `docs/currency.md` |
+| The record sheet's Agent tab | `docs/agent-panel.md` |
+| Running it locally, Google Cloud, DB commands, secrets | `docs/setup.md` |
+| Anything that sends a telemetry event, or a new property on one | `docs/telemetry.md` |
 
-## Code Comments
-Do not add code comments to the code you write, ever.
+Also check `.agents/skills/` for a relevant skill before starting — better-auth,
+prisma, nestjs-trpc, eve, shadcn, nuqs and others have one. Tell the user which
+rules and skills you read.
 
-## Design
-Read @docs/design.md
+## Always true
 
-## API:
-Read @docs/api.md
+- **Never add code comments.** Not to new code, not to code you edit.
+- **No coauthoring commits.** No `Co-Authored-By` trailer, ever.
+- **Intelligence lives in `apps/agent`, never in the API.** No vendor client, no
+  enrichment, no scoring, no identity matching in Nest — it writes an `AgentTask`
+  row and lets the agent decide. See `docs/api.md`.
+- **One `.env`, at the repo root.** `.env.example` is its documentation: add every
+  new variable there with a note on what it does, and declare it in
+  `apps/api/src/config/env.validation.ts` if the API reads it. Never add a
+  per-package `.env`.
+- **Anything a self-hoster might not have is optional and must never throw.** A
+  missing key removes a capability. `apps/agent/agent/lib/capabilities.ts` is the
+  pattern.
+- **`/packages/ui` is the single source of truth for UI.** Shared shadcn
+  components only; a new variant is implemented there, not overridden at the call
+  site.
+- **eve's own docs ship in `apps/agent/node_modules/eve/docs`** and match the
+  installed version. Read the relevant guide before writing eve code rather than
+  working from memory — guessing typechecks, builds, and then behaves differently.
 
-## The research agent (`apps/agent`):
-Read @docs/agent.md
+## Design
 
-Every piece of intelligence in this repo lives there, not in the API. The
-complete eve documentation ships in `apps/agent/node_modules/eve/docs` and
-matches the installed version — read the relevant guide before writing eve code
-rather than working from memory of the API.
-
-ABSOLUTELY, no coauthoring commits.
-
-## Environment / configuration:
-Read @docs/environment.md
-
-There is **one `.env`, at the root of the repo**, and `.env.example` is its
-documentation. If you add a variable, add it to `.env.example` with a note on
-what it does — and if the API reads it, declare it in
-`apps/api/src/config/env.validation.ts` too. Never add a per-package `.env`.
-
-Anything a self-hoster might not have is optional, and the code must work
-without it: a missing key removes a capability, it never throws. See
-`apps/agent/agent/lib/capabilities.ts` for the pattern.
-
+@docs/design.md
 
 ## Median Tasks
 

@@ -16,8 +16,8 @@ export function Hero() {
 				</p>
 
 				<div className="flex flex-wrap items-center justify-center gap-3 pt-3">
-					<SetupPromptButton />
-					<GitHubStarButton />
+					<SetupPromptButton location="hero" />
+					<GitHubStarButton location="hero" />
 				</div>
 			</div>
 		</section>

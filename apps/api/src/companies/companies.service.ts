@@ -19,6 +19,7 @@ import {
 	type StampTargets,
 } from "../crm/activity-stamp.service";
 import { blankToNull, toCents } from "../crm/values";
+import { ConversionService } from "../currency/conversion.service";
 import { InjectDatabase } from "../database/database.constants";
 import { OPEN_DEAL_STAGES } from "../deals/deal-stage";
 import {
@@ -94,6 +95,7 @@ export class CompaniesService {
 		private readonly queue: AgentQueueService,
 		private readonly favicon: FaviconService,
 		private readonly stamp: ActivityStampService,
+		private readonly conversion: ConversionService,
 	) {}
 
 	async list(input: CompanyListInput): Promise<ListResult<CompanyRow>> {
@@ -226,6 +228,7 @@ export class CompaniesService {
 						stage: true,
 						amount: true,
 						currency: true,
+						baseAmount: true,
 						expectedCloseDate: true,
 						owner: { select: OWNER_SELECT },
 					},
@@ -246,10 +249,13 @@ export class CompaniesService {
 			enrichedAt: enrichedAt?.toISOString() ?? null,
 			primaryContactId: primaryContact?.id ?? null,
 			primaryContact,
+			reportingCurrency: await this.conversion.reportingCurrency(),
 			deals: deals.map((deal) => ({
 				...deal,
 				amount: undefined,
+				baseAmount: undefined,
 				amountCents: toCents(deal.amount),
+				baseAmountCents: toCents(deal.baseAmount),
 				expectedCloseDate: deal.expectedCloseDate?.toISOString() ?? null,
 			})),
 		};

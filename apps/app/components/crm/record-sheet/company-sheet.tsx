@@ -189,9 +189,12 @@ export function CompanySheet({ companyId }: { companyId: string }) {
 	const openDeals =
 		company?.deals.filter((deal) => OPEN_STAGES.includes(deal.stage)) ?? [];
 	const openValueCents = openDeals.reduce(
-		(total, deal) => total + (deal.amountCents ?? 0),
+		(total, deal) => total + (deal.baseAmountCents ?? 0),
 		0,
 	);
+	const openUncounted = openDeals.filter(
+		(deal) => deal.amountCents !== null && deal.baseAmountCents === null,
+	).length;
 	const closing = nextClose(openDeals);
 
 	const tabs: DetailSheetTab[] = company
@@ -302,8 +305,14 @@ export function CompanySheet({ companyId }: { companyId: string }) {
 					<DetailSheetStats>
 						<DetailSheetStat label="Open pipeline">
 							<span className="tabular-nums">
-								{formatMoney(openValueCents)}
+								{formatMoney(openValueCents, company.reportingCurrency)}
 							</span>
+							{openUncounted > 0 ? (
+								<span className="text-muted-foreground">
+									{" "}
+									+{openUncounted} unconverted
+								</span>
+							) : null}
 						</DetailSheetStat>
 						<DetailSheetStat label="Open deals">
 							<span className="tabular-nums">{openDeals.length}</span>

@@ -10,8 +10,8 @@ export function ClosingCta() {
 				</h2>
 
 				<div className="flex flex-wrap items-center justify-center gap-3">
-					<SetupPromptButton />
-					<GitHubStarButton />
+					<SetupPromptButton location="closing" />
+					<GitHubStarButton location="closing" />
 				</div>
 			</div>
 		</section>
