@@ -24,6 +24,22 @@ export function consumeBuilderCommand(
 	};
 }
 
+export function consumeBuilderIntent(message: string): {
+	commandType: "CREATE_AGENT";
+	body: string;
+	invocation: string;
+} | null {
+	const trimmed = message.trimStart();
+	const match = CREATE_AGENT_REQUEST.exec(trimmed);
+	if (!match) return null;
+
+	return {
+		commandType: "CREATE_AGENT",
+		body: trimmed.slice(match[0].length).replace(/^[\s,:-]+/, ""),
+		invocation: match[0].trim(),
+	};
+}
+
 export function hasCreateAgentCommand(
 	submissions: ReadonlyArray<{ commandType: BuilderCommandType }>,
 ): boolean {

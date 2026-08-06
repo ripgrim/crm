@@ -157,7 +157,7 @@ export function AsyncButtonContent({
 
 	return (
 		<LazyMotion features={domAnimation}>
-			<span className="grid min-w-0 items-center justify-items-center">
+			<span className="relative grid min-w-0 items-center justify-items-center">
 				{states.map((state) => {
 					const active = state.status === status;
 					return (
@@ -177,15 +177,15 @@ export function AsyncButtonContent({
 						</m.span>
 					);
 				})}
-			</span>
-			<span role="status" aria-live="polite" className="sr-only">
-				{status === "pending"
-					? pendingLabel
-					: status === "success"
-						? successLabel
-						: status === "error"
-							? errorLabel
-							: ""}
+				<span role="status" aria-live="polite" className="sr-only">
+					{status === "pending"
+						? pendingLabel
+						: status === "success"
+							? successLabel
+							: status === "error"
+								? errorLabel
+								: ""}
+				</span>
 			</span>
 		</LazyMotion>
 	);

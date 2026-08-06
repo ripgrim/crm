@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	builderCommandType,
 	consumeBuilderCommand,
+	consumeBuilderIntent,
 	hasCreateAgentCommand,
 } from "../lib/agent-builder";
 
@@ -44,6 +45,16 @@ describe("agent builder commands", () => {
 			commandType: "CREATE_AGENT",
 			body: "Flag stalled deals",
 		});
+		expect(
+			consumeBuilderIntent("Build an agent that flags stalled deals"),
+		).toEqual({
+			commandType: "CREATE_AGENT",
+			body: "that flags stalled deals",
+			invocation: "Build an agent",
+		});
+		expect(
+			consumeBuilderIntent("Tell me about our agent workflows"),
+		).toBeNull();
 	});
 
 	it("shows creation surfaces only after a creation command", () => {

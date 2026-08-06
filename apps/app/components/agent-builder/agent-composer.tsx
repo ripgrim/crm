@@ -33,6 +33,7 @@ import {
 	type BuilderCommandType,
 	builderCommandType,
 	consumeBuilderCommand,
+	consumeBuilderIntent,
 } from "@/lib/agent-builder";
 import { useTRPC } from "@/lib/trpc/client";
 import { AGENT_COMPOSER_CLASS_NAME } from "../agent-composer-frame";
@@ -89,6 +90,7 @@ type ComposerCommand = typeof CREATE_AGENT_COMMAND;
 type ComposerState = {
 	draft: string;
 	command: ComposerCommand | null;
+	detectedCommandLabel: string | null;
 	commandOpen: boolean;
 	resourceQuery: string;
 	resources: BuilderResource[];
@@ -111,10 +113,14 @@ type ComposerAction =
 	| { type: "submitted" };
 
 function initialComposerState(initialPrompt: string): ComposerState {
-	const command = consumeBuilderCommand(initialPrompt);
+	const explicitCommand = consumeBuilderCommand(initialPrompt);
+	const detectedIntent = explicitCommand
+		? null
+		: consumeBuilderIntent(initialPrompt);
 	return {
-		draft: command?.body ?? initialPrompt,
-		command: command ? CREATE_AGENT_COMMAND : null,
+		draft: explicitCommand?.body ?? initialPrompt,
+		command: explicitCommand || detectedIntent ? CREATE_AGENT_COMMAND : null,
+		detectedCommandLabel: detectedIntent?.invocation ?? null,
 		commandOpen: false,
 		resourceQuery: "",
 		resources: [],
@@ -129,12 +135,25 @@ function composerReducer(
 ): ComposerState {
 	switch (action.type) {
 		case "draft.changed": {
-			const parsed = consumeBuilderCommand(action.value);
-			if (parsed) {
+			const explicitCommand = consumeBuilderCommand(action.value);
+			if (explicitCommand) {
 				return {
 					...state,
-					draft: parsed.body,
+					draft: explicitCommand.body,
 					command: CREATE_AGENT_COMMAND,
+					detectedCommandLabel: null,
+					commandOpen: false,
+				};
+			}
+			const detectedIntent = state.command
+				? null
+				: consumeBuilderIntent(action.value);
+			if (detectedIntent) {
+				return {
+					...state,
+					draft: action.value,
+					command: CREATE_AGENT_COMMAND,
+					detectedCommandLabel: detectedIntent.invocation,
 					commandOpen: false,
 				};
 			}
@@ -148,11 +167,16 @@ function composerReducer(
 			return {
 				...state,
 				command: CREATE_AGENT_COMMAND,
+				detectedCommandLabel: null,
 				commandOpen: false,
 				draft: state.draft.trimStart().startsWith("/") ? "" : state.draft,
 			};
 		case "command.removed":
-			return { ...state, command: null };
+			return {
+				...state,
+				command: null,
+				detectedCommandLabel: null,
+			};
 		case "command.open.changed":
 			return { ...state, commandOpen: action.open };
 		case "resource.query.changed":
@@ -203,6 +227,7 @@ function composerReducer(
 				...state,
 				draft: "",
 				command: null,
+				detectedCommandLabel: null,
 				commandOpen: false,
 				resources: [],
 				attachments: [],
@@ -258,9 +283,10 @@ export function AgentComposer({
 	const submit = () => {
 		if (!canSend) return;
 		const body = state.draft.trim();
-		const message = state.command
-			? `${state.command.invocation} ${body}`
-			: body;
+		const message =
+			state.command && !state.detectedCommandLabel
+				? `${state.command.invocation} ${body}`
+				: body;
 		const prompt = {
 			commandType: state.command?.commandType ?? builderCommandType(message),
 			message,
@@ -294,27 +320,13 @@ export function AgentComposer({
 				dispatch={dispatch}
 			/>
 
-			<Textarea
+			<ComposerTextarea
+				mode={mode}
 				value={state.draft}
-				onChange={(event) =>
-					dispatch({ type: "draft.changed", value: event.target.value })
-				}
-				onKeyDown={(event) => {
-					if (event.key === "Enter" && !event.shiftKey) {
-						event.preventDefault();
-						submit();
-					}
-				}}
+				detectedIntent={state.detectedCommandLabel}
+				onChange={(value) => dispatch({ type: "draft.changed", value })}
 				disabled={locked}
-				rows={mode === "home" ? 2 : 1}
-				variant="composer"
-				size="composer"
-				placeholder={
-					mode === "home"
-						? "Ask about your CRM or automate a task…"
-						: "Send a message"
-				}
-				aria-label="Message the agent builder"
+				onSubmit={submit}
 			/>
 
 			<div className="flex h-7 items-center justify-between">
@@ -354,6 +366,77 @@ export function AgentComposer({
 					</AsyncButtonContent>
 				</Button>
 			</div>
+		</div>
+	);
+}
+
+function ComposerTextarea({
+	mode,
+	value,
+	detectedIntent,
+	disabled,
+	onChange,
+	onSubmit,
+}: {
+	mode: "home" | "chat";
+	value: string;
+	detectedIntent: string | null;
+	disabled: boolean;
+	onChange: (value: string) => void;
+	onSubmit: () => void;
+}) {
+	const emphasis = useRef<HTMLDivElement>(null);
+	const intentStart = detectedIntent ? value.indexOf(detectedIntent) : -1;
+	const showEmphasis = detectedIntent !== null && intentStart >= 0;
+
+	return (
+		<div className="relative grid">
+			{showEmphasis ? (
+				<div
+					ref={emphasis}
+					data-intent-overlay
+					aria-hidden
+					className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words border border-transparent px-1 py-0 text-base leading-6 sm:text-[15px] md:text-xs"
+				>
+					<span>{value.slice(0, intentStart)}</span>
+					<span data-intent-trigger className="relative">
+						{detectedIntent}
+						<span
+							data-intent-accent
+							className="absolute inset-x-0 bottom-0 h-px origin-left animate-in bg-primary duration-200 ease-out zoom-in-0 motion-reduce:animate-none"
+						/>
+					</span>
+					<span>{value.slice(intentStart + detectedIntent.length)}</span>
+				</div>
+			) : null}
+			<Textarea
+				value={value}
+				onChange={(event) => onChange(event.target.value)}
+				onScroll={(event) => {
+					if (!emphasis.current) return;
+					emphasis.current.style.translate = `${-event.currentTarget.scrollLeft}px ${-event.currentTarget.scrollTop}px`;
+				}}
+				onKeyDown={(event) => {
+					if (event.key === "Enter" && !event.shiftKey) {
+						event.preventDefault();
+						onSubmit();
+					}
+				}}
+				disabled={disabled}
+				rows={mode === "home" ? 2 : 1}
+				variant="composer"
+				size="composer"
+				placeholder={
+					mode === "home"
+						? "Ask about your CRM or automate a task…"
+						: "Send a message"
+				}
+				aria-label="Message the agent builder"
+				className={cn(
+					"relative",
+					showEmphasis && "text-transparent caret-foreground",
+				)}
+			/>
 		</div>
 	);
 }
