@@ -10,7 +10,10 @@ import Email from "@carbon/icons-react/es/Email";
 import Partnership from "@carbon/icons-react/es/Partnership";
 import Search from "@carbon/icons-react/es/Search";
 import User from "@carbon/icons-react/es/User";
-import { AsyncButtonContent } from "@crm/ui/components/async-action";
+import {
+	AsyncButtonContent,
+	useAsyncAction,
+} from "@crm/ui/components/async-action";
 import { Button } from "@crm/ui/components/button";
 import { type CarbonIcon, Icon } from "@crm/ui/components/icon";
 import { Input } from "@crm/ui/components/input";
@@ -24,7 +27,7 @@ import { SkeletonSwap } from "@crm/ui/components/skeleton-swap";
 import { Textarea } from "@crm/ui/components/textarea";
 import { cn } from "@crm/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useReducer, useRef } from "react";
 import { toast } from "sonner";
 import {
 	type BuilderCommandType,
@@ -44,15 +47,34 @@ import {
 
 export type BuilderResource = ChatChipResource;
 
-export type BuilderAttachment = ChatChipAttachment & {
+export type BuilderUploadAttachment = ChatChipAttachment & {
+	id?: never;
 	contentBase64: string;
 };
 
-export type BuilderPrompt = {
+export type BuilderStoredAttachment = ChatChipAttachment & {
+	id: string;
+	contentBase64?: never;
+};
+
+export type BuilderAttachment =
+	| BuilderUploadAttachment
+	| BuilderStoredAttachment;
+
+export type BuilderPrompt<
+	TAttachment extends BuilderAttachment = BuilderAttachment,
+> = {
 	commandType: BuilderCommandType;
 	message: string;
 	resources: BuilderResource[];
-	attachments: BuilderAttachment[];
+	attachments: TAttachment[];
+};
+
+export type BuilderComposerPrompt = BuilderPrompt<BuilderUploadAttachment>;
+
+type PendingSubmission = {
+	key: string;
+	clientRequestId: string;
 };
 
 const CREATE_AGENT_COMMAND = {
@@ -62,78 +84,200 @@ const CREATE_AGENT_COMMAND = {
 	description: "Build a durable team automation",
 };
 
+type ComposerCommand = typeof CREATE_AGENT_COMMAND;
+
+type ComposerState = {
+	draft: string;
+	command: ComposerCommand | null;
+	commandOpen: boolean;
+	resourceQuery: string;
+	resources: BuilderResource[];
+	attachments: BuilderUploadAttachment[];
+	attachmentsReading: boolean;
+};
+
+type ComposerAction =
+	| { type: "draft.changed"; value: string }
+	| { type: "command.selected" }
+	| { type: "command.removed" }
+	| { type: "command.open.changed"; open: boolean }
+	| { type: "resource.query.changed"; value: string }
+	| { type: "resource.added"; resource: BuilderResource }
+	| { type: "resource.removed"; resource: BuilderResource }
+	| { type: "attachments.added"; attachments: BuilderUploadAttachment[] }
+	| { type: "attachment.removed"; attachment: BuilderUploadAttachment }
+	| { type: "attachments.reading.started" }
+	| { type: "attachments.reading.finished" }
+	| { type: "submitted" };
+
+function initialComposerState(initialPrompt: string): ComposerState {
+	const command = consumeBuilderCommand(initialPrompt);
+	return {
+		draft: command?.body ?? initialPrompt,
+		command: command ? CREATE_AGENT_COMMAND : null,
+		commandOpen: false,
+		resourceQuery: "",
+		resources: [],
+		attachments: [],
+		attachmentsReading: false,
+	};
+}
+
+function composerReducer(
+	state: ComposerState,
+	action: ComposerAction,
+): ComposerState {
+	switch (action.type) {
+		case "draft.changed": {
+			const parsed = consumeBuilderCommand(action.value);
+			if (parsed) {
+				return {
+					...state,
+					draft: parsed.body,
+					command: CREATE_AGENT_COMMAND,
+					commandOpen: false,
+				};
+			}
+			return {
+				...state,
+				draft: action.value,
+				commandOpen: !state.command && action.value.trimStart().startsWith("/"),
+			};
+		}
+		case "command.selected":
+			return {
+				...state,
+				command: CREATE_AGENT_COMMAND,
+				commandOpen: false,
+				draft: state.draft.trimStart().startsWith("/") ? "" : state.draft,
+			};
+		case "command.removed":
+			return { ...state, command: null };
+		case "command.open.changed":
+			return { ...state, commandOpen: action.open };
+		case "resource.query.changed":
+			return { ...state, resourceQuery: action.value };
+		case "resource.added":
+			return state.resources.some(
+				(item) =>
+					item.kind === action.resource.kind && item.id === action.resource.id,
+			)
+				? state
+				: { ...state, resources: [...state.resources, action.resource] };
+		case "resource.removed":
+			return {
+				...state,
+				resources: state.resources.filter(
+					(item) =>
+						item.kind !== action.resource.kind ||
+						item.id !== action.resource.id,
+				),
+			};
+		case "attachments.added": {
+			const keys = new Set(state.attachments.map(attachmentKey));
+			const added = action.attachments.filter((attachment) => {
+				const key = attachmentKey(attachment);
+				if (keys.has(key)) return false;
+				keys.add(key);
+				return true;
+			});
+			if (added.length === 0) return state;
+			return {
+				...state,
+				attachments: [...state.attachments, ...added].slice(0, 5),
+			};
+		}
+		case "attachment.removed":
+			return {
+				...state,
+				attachments: state.attachments.filter(
+					(item) => item !== action.attachment,
+				),
+			};
+		case "attachments.reading.started":
+			return { ...state, attachmentsReading: true };
+		case "attachments.reading.finished":
+			return { ...state, attachmentsReading: false };
+		case "submitted":
+			return {
+				...state,
+				draft: "",
+				command: null,
+				commandOpen: false,
+				resources: [],
+				attachments: [],
+				attachmentsReading: false,
+			};
+	}
+}
+
+function attachmentKey(attachment: ChatChipAttachment): string {
+	return (
+		attachment.id ?? `${attachment.name}:${attachment.type}:${attachment.size}`
+	);
+}
+
 export function AgentComposer({
 	mode,
 	disabled = false,
-	pending = false,
 	initialPrompt = "",
 	onSubmit,
 }: {
 	mode: "home" | "chat";
 	disabled?: boolean;
-	pending?: boolean;
 	initialPrompt?: string;
-	onSubmit: (prompt: BuilderPrompt) => void;
+	onSubmit: (
+		prompt: BuilderComposerPrompt,
+		clientRequestId: string,
+	) => Promise<void>;
 }) {
 	const trpc = useTRPC();
-	const fileInput = useRef<HTMLInputElement>(null);
-	const initialCommand = consumeBuilderCommand(initialPrompt);
-	const [draft, setDraft] = useState(initialCommand?.body ?? initialPrompt);
-	const [command, setCommand] = useState<typeof CREATE_AGENT_COMMAND | null>(
-		initialCommand ? CREATE_AGENT_COMMAND : null,
+	const pendingSubmission = useRef<PendingSubmission | null>(null);
+	const [state, dispatch] = useReducer(
+		composerReducer,
+		initialPrompt,
+		initialComposerState,
 	);
-	const [commandOpen, setCommandOpen] = useState(false);
-	const [resourceQuery, setResourceQuery] = useState("");
-	const [resources, setResources] = useState<BuilderResource[]>([]);
-	const [attachments, setAttachments] = useState<BuilderAttachment[]>([]);
 	const resourceResults = useQuery(
-		trpc.conversations.builderResources.queryOptions({ q: resourceQuery }),
+		trpc.conversations.builderResources.queryOptions({
+			q: state.resourceQuery,
+		}),
 	);
 	const google = useQuery(trpc.google.status.queryOptions());
-	const canSend = draft.trim().length > 0 && !disabled && !pending;
+	const submitAction = useAsyncAction({
+		action: onSubmit,
+		onSuccess: () => {
+			pendingSubmission.current = null;
+			dispatch({ type: "submitted" });
+		},
+	});
+	const locked = disabled || submitAction.pending;
+	const canSend =
+		state.draft.trim().length > 0 && !locked && !state.attachmentsReading;
 
 	const submit = () => {
 		if (!canSend) return;
-		const body = draft.trim();
-		const message = command ? `${command.invocation} ${body}` : body;
-		onSubmit({
-			commandType: command?.commandType ?? builderCommandType(message),
+		const body = state.draft.trim();
+		const message = state.command
+			? `${state.command.invocation} ${body}`
+			: body;
+		const prompt = {
+			commandType: state.command?.commandType ?? builderCommandType(message),
 			message,
-			resources,
-			attachments,
-		});
-		setDraft("");
-		setCommand(null);
-		setCommandOpen(false);
-		setResources([]);
-		setAttachments([]);
-	};
-
-	const addResource = (resource: BuilderResource) => {
-		setResources((current) =>
-			current.some(
-				(item) => item.kind === resource.kind && item.id === resource.id,
-			)
-				? current
-				: [...current, resource],
-		);
+			resources: state.resources,
+			attachments: state.attachments,
+		};
+		const key = JSON.stringify(prompt);
+		const pending = pendingSubmission.current;
+		const clientRequestId =
+			pending?.key === key ? pending.clientRequestId : crypto.randomUUID();
+		pendingSubmission.current = { key, clientRequestId };
+		submitAction.run(prompt, clientRequestId);
 	};
 
 	const connectedGoogle = (google.data?.sources ?? []).filter(
 		(source) => source.connected,
 	);
-	const updateDraft = (value: string) => {
-		const parsed = consumeBuilderCommand(value);
-		if (parsed) {
-			setCommand(CREATE_AGENT_COMMAND);
-			setDraft(parsed.body);
-			setCommandOpen(false);
-			return;
-		}
-
-		setDraft(value);
-		setCommandOpen(!command && value.trimStart().startsWith("/"));
-	};
 
 	return (
 		<div
@@ -142,54 +286,26 @@ export function AgentComposer({
 				mode === "home" ? "min-h-24" : "min-h-[78px]",
 			)}
 		>
-			{command || resources.length > 0 || attachments.length > 0 ? (
-				<div className="flex flex-wrap gap-1 px-1 pb-1">
-					{command ? (
-						<ChatCommandChip
-							label={command.label}
-							icon={Application}
-							onRemove={() => setCommand(null)}
-						/>
-					) : null}
-					{resources.map((resource) => (
-						<ChatReferenceChip
-							key={`${resource.kind}:${resource.id}`}
-							resource={resource}
-							icon={RESOURCE_ICONS[resource.kind]}
-							onRemove={() =>
-								setResources((current) =>
-									current.filter(
-										(item) =>
-											item.kind !== resource.kind || item.id !== resource.id,
-									),
-								)
-							}
-						/>
-					))}
-					{attachments.map((attachment) => (
-						<ChatAttachmentChip
-							key={`${attachment.name}:${attachment.size}`}
-							attachment={attachment}
-							onRemove={() =>
-								setAttachments((current) =>
-									current.filter((item) => item !== attachment),
-								)
-							}
-						/>
-					))}
-				</div>
-			) : null}
+			<ComposerContext
+				command={state.command}
+				resources={state.resources}
+				attachments={state.attachments}
+				disabled={locked}
+				dispatch={dispatch}
+			/>
 
 			<Textarea
-				value={draft}
-				onChange={(event) => updateDraft(event.target.value)}
+				value={state.draft}
+				onChange={(event) =>
+					dispatch({ type: "draft.changed", value: event.target.value })
+				}
 				onKeyDown={(event) => {
 					if (event.key === "Enter" && !event.shiftKey) {
 						event.preventDefault();
 						submit();
 					}
 				}}
-				disabled={disabled}
+				disabled={locked}
 				rows={mode === "home" ? 2 : 1}
 				variant="composer"
 				size="composer"
@@ -202,163 +318,35 @@ export function AgentComposer({
 			/>
 
 			<div className="flex h-7 items-center justify-between">
-				<div className="flex items-center gap-0.5">
-					<Popover>
-						<PopoverTrigger asChild>
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								aria-label="Tag CRM records and integrations"
-							>
-								<Icon icon={Add} />
-							</Button>
-						</PopoverTrigger>
-						<PopoverContent
-							size="fit"
-							align="start"
-							side="top"
-							className="w-80"
-						>
-							<div className="border-b p-2">
-								<div className="relative">
-									<Icon
-										icon={Search}
-										className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
-									/>
-									<Input
-										value={resourceQuery}
-										onChange={(event) => setResourceQuery(event.target.value)}
-										placeholder="Search CRM records"
-										className="pl-8"
-									/>
-								</div>
-							</div>
-							<div className="max-h-72 overflow-y-auto p-1">
-								{connectedGoogle.map((source) => (
-									<ResourceButton
-										key={source.source}
-										icon={source.source === "calendar" ? Calendar : Email}
-										label={
-											source.source === "calendar" ? "Google Calendar" : "Gmail"
-										}
-										detail="Connected integration"
-										onSelect={() =>
-											addResource({
-												kind: "integration",
-												id: `google:${source.source}`,
-												label:
-													source.source === "calendar"
-														? "Google Calendar"
-														: "Gmail",
-												detail: "Connected integration",
-												imageUrl: null,
-											})
-										}
-									/>
-								))}
-								<SkeletonSwap
-									loading={resourceResults.isFetching}
-									label="CRM records"
-									skeleton={<ResourceResultsSkeleton />}
-								>
-									{(resourceResults.data ?? []).map((resource) => (
-										<ResourceButton
-											key={`${resource.kind}:${resource.id}`}
-											icon={RESOURCE_ICONS[resource.kind]}
-											label={resource.label}
-											detail={resource.detail ?? RESOURCE_LABELS[resource.kind]}
-											imageUrl={resource.imageUrl}
-											onSelect={() => addResource(resource)}
-										/>
-									))}
-									{resourceResults.isSuccess &&
-									connectedGoogle.length === 0 &&
-									resourceResults.data.length === 0 ? (
-										<p className="px-3 py-5 text-center text-muted-foreground text-xs">
-											No matching records.
-										</p>
-									) : null}
-								</SkeletonSwap>
-							</div>
-						</PopoverContent>
-					</Popover>
-
-					<input
-						ref={fileInput}
-						type="file"
-						multiple
-						className="hidden"
-						onChange={(event) => {
-							void addFiles(event.currentTarget.files, setAttachments);
-							event.currentTarget.value = "";
-						}}
-					/>
-					<Button
-						variant="ghost"
-						size="icon-sm"
-						aria-label="Attach files"
-						onClick={() => fileInput.current?.click()}
-					>
-						<Icon icon={AttachmentIcon} />
-					</Button>
-
-					<Popover open={commandOpen} onOpenChange={setCommandOpen}>
-						<PopoverTrigger asChild>
-							<Button
-								variant="ghost"
-								size="icon-sm"
-								aria-label="Open slash commands"
-								className="font-mono text-sm"
-							>
-								/
-							</Button>
-						</PopoverTrigger>
-						<PopoverContent
-							size="fit"
-							align="start"
-							side="top"
-							className="w-64 p-1"
-						>
-							<button
-								type="button"
-								onClick={() => {
-									setCommand(CREATE_AGENT_COMMAND);
-									setDraft((current) =>
-										current.trimStart().startsWith("/") ? "" : current,
-									);
-									setCommandOpen(false);
-								}}
-								className="flex w-full items-center gap-3 rounded-sm px-3 py-2 text-left outline-none hover:bg-muted focus-visible:bg-muted"
-							>
-								<Icon
-									icon={Application}
-									className="size-4 text-muted-foreground"
-								/>
-								<span>
-									<span className="block font-medium text-xs">
-										/{CREATE_AGENT_COMMAND.label}
-									</span>
-									<span className="block text-muted-foreground text-xs">
-										{CREATE_AGENT_COMMAND.description}
-									</span>
-								</span>
-							</button>
-						</PopoverContent>
-					</Popover>
-				</div>
+				<ComposerTools
+					state={state}
+					resources={resourceResults.data ?? []}
+					resourcesLoading={resourceResults.isFetching}
+					resourcesReady={resourceResults.isSuccess}
+					connectedGoogle={connectedGoogle}
+					disabled={locked}
+					attachmentsReading={state.attachmentsReading}
+					dispatch={dispatch}
+				/>
 
 				<Button
 					variant="default"
 					size="icon-sm"
 					disabled={!canSend}
-					aria-busy={pending}
-					aria-label="Send message"
+					aria-busy={submitAction.pending || state.attachmentsReading}
+					aria-label={
+						state.attachmentsReading ? "Preparing attachments" : "Send message"
+					}
 					onClick={submit}
 					className="rounded-full"
 				>
 					<AsyncButtonContent
-						status={pending ? "pending" : "idle"}
-						pendingLabel={<span className="sr-only">Sending</span>}
+						status={state.attachmentsReading ? "pending" : submitAction.status}
+						pendingLabel={
+							<span className="sr-only">
+								{state.attachmentsReading ? "Preparing attachments" : "Sending"}
+							</span>
+						}
 						successLabel={<span className="sr-only">Sent</span>}
 						errorLabel={<span className="sr-only">Send failed</span>}
 					>
@@ -367,6 +355,305 @@ export function AgentComposer({
 				</Button>
 			</div>
 		</div>
+	);
+}
+
+function ComposerContext({
+	command,
+	resources,
+	attachments,
+	disabled,
+	dispatch,
+}: {
+	command: ComposerCommand | null;
+	resources: BuilderResource[];
+	attachments: BuilderUploadAttachment[];
+	disabled: boolean;
+	dispatch: React.Dispatch<ComposerAction>;
+}) {
+	if (!command && resources.length === 0 && attachments.length === 0) {
+		return null;
+	}
+
+	return (
+		<div className="flex flex-wrap gap-1 px-1 pb-1">
+			{command ? (
+				<ChatCommandChip
+					label={command.label}
+					icon={Application}
+					onRemove={
+						disabled ? undefined : () => dispatch({ type: "command.removed" })
+					}
+				/>
+			) : null}
+			{resources.map((resource) => (
+				<ChatReferenceChip
+					key={`${resource.kind}:${resource.id}`}
+					resource={resource}
+					icon={RESOURCE_ICONS[resource.kind]}
+					onRemove={
+						disabled
+							? undefined
+							: () => dispatch({ type: "resource.removed", resource })
+					}
+				/>
+			))}
+			{attachments.map((attachment) => (
+				<ChatAttachmentChip
+					key={attachmentKey(attachment)}
+					attachment={attachment}
+					onRemove={
+						disabled
+							? undefined
+							: () => dispatch({ type: "attachment.removed", attachment })
+					}
+				/>
+			))}
+		</div>
+	);
+}
+
+function ComposerTools({
+	state,
+	resources,
+	resourcesLoading,
+	resourcesReady,
+	connectedGoogle,
+	disabled,
+	attachmentsReading,
+	dispatch,
+}: {
+	state: ComposerState;
+	resources: BuilderResource[];
+	resourcesLoading: boolean;
+	resourcesReady: boolean;
+	connectedGoogle: Array<{ source: string }>;
+	disabled: boolean;
+	attachmentsReading: boolean;
+	dispatch: React.Dispatch<ComposerAction>;
+}) {
+	return (
+		<div className="flex items-center gap-0.5">
+			<ResourcePicker
+				query={state.resourceQuery}
+				resources={resources}
+				loading={resourcesLoading}
+				ready={resourcesReady}
+				connectedGoogle={connectedGoogle}
+				disabled={disabled}
+				dispatch={dispatch}
+			/>
+			<AttachmentPicker
+				disabled={disabled || attachmentsReading}
+				dispatch={dispatch}
+			/>
+			<CommandPicker
+				open={state.commandOpen}
+				disabled={disabled}
+				dispatch={dispatch}
+			/>
+		</div>
+	);
+}
+
+function ResourcePicker({
+	query,
+	resources,
+	loading,
+	ready,
+	connectedGoogle,
+	disabled,
+	dispatch,
+}: {
+	query: string;
+	resources: BuilderResource[];
+	loading: boolean;
+	ready: boolean;
+	connectedGoogle: Array<{ source: string }>;
+	disabled: boolean;
+	dispatch: React.Dispatch<ComposerAction>;
+}) {
+	const add = (resource: BuilderResource) =>
+		dispatch({ type: "resource.added", resource });
+
+	return (
+		<Popover>
+			<PopoverTrigger asChild>
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					aria-label="Tag CRM records and integrations"
+					disabled={disabled}
+				>
+					<Icon icon={Add} />
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent size="fit" align="start" side="top" className="w-80">
+				<div className="border-b p-2">
+					<div className="relative">
+						<Icon
+							icon={Search}
+							className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground"
+						/>
+						<Input
+							value={query}
+							onChange={(event) =>
+								dispatch({
+									type: "resource.query.changed",
+									value: event.target.value,
+								})
+							}
+							placeholder="Search CRM records"
+							aria-label="Search CRM records"
+							disabled={disabled}
+							className="pl-8"
+						/>
+					</div>
+				</div>
+				<div className="max-h-72 overflow-y-auto p-1">
+					{connectedGoogle.map((source) => {
+						const calendar = source.source === "calendar";
+						const label = calendar ? "Google Calendar" : "Gmail";
+						return (
+							<ResourceButton
+								key={source.source}
+								icon={calendar ? Calendar : Email}
+								label={label}
+								detail="Connected integration"
+								disabled={disabled}
+								onSelect={() =>
+									add({
+										kind: "integration",
+										id: `google:${source.source}`,
+										label,
+										detail: "Connected integration",
+										imageUrl: null,
+									})
+								}
+							/>
+						);
+					})}
+					<SkeletonSwap
+						loading={loading}
+						label="CRM records"
+						skeleton={<ResourceResultsSkeleton />}
+					>
+						{resources.map((resource) => (
+							<ResourceButton
+								key={`${resource.kind}:${resource.id}`}
+								icon={RESOURCE_ICONS[resource.kind]}
+								label={resource.label}
+								detail={resource.detail ?? RESOURCE_LABELS[resource.kind]}
+								disabled={disabled}
+								imageUrl={resource.imageUrl}
+								onSelect={() => add(resource)}
+							/>
+						))}
+						{ready && connectedGoogle.length === 0 && resources.length === 0 ? (
+							<p className="px-3 py-5 text-center text-muted-foreground text-xs">
+								No matching records.
+							</p>
+						) : null}
+					</SkeletonSwap>
+				</div>
+			</PopoverContent>
+		</Popover>
+	);
+}
+
+function AttachmentPicker({
+	disabled,
+	dispatch,
+}: {
+	disabled: boolean;
+	dispatch: React.Dispatch<ComposerAction>;
+}) {
+	const input = useRef<HTMLInputElement>(null);
+	const addFiles = async (files: FileList | null) => {
+		if (!files || files.length === 0) return;
+		dispatch({ type: "attachments.reading.started" });
+		try {
+			const attachments = await readFiles(files);
+			dispatch({ type: "attachments.added", attachments });
+		} catch {
+			toast.error("Those files could not be attached. Try again.");
+		} finally {
+			dispatch({ type: "attachments.reading.finished" });
+		}
+	};
+
+	return (
+		<>
+			<input
+				ref={input}
+				type="file"
+				multiple
+				disabled={disabled}
+				className="hidden"
+				onChange={(event) => {
+					void addFiles(event.currentTarget.files);
+					event.currentTarget.value = "";
+				}}
+			/>
+			<Button
+				variant="ghost"
+				size="icon-sm"
+				aria-label="Attach files"
+				disabled={disabled}
+				onClick={() => input.current?.click()}
+			>
+				<Icon icon={AttachmentIcon} />
+			</Button>
+		</>
+	);
+}
+
+function CommandPicker({
+	open,
+	disabled,
+	dispatch,
+}: {
+	open: boolean;
+	disabled: boolean;
+	dispatch: React.Dispatch<ComposerAction>;
+}) {
+	return (
+		<Popover
+			open={disabled ? false : open}
+			onOpenChange={(next) =>
+				dispatch({ type: "command.open.changed", open: next })
+			}
+		>
+			<PopoverTrigger asChild>
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					aria-label="Open slash commands"
+					disabled={disabled}
+					className="font-mono text-sm"
+				>
+					/
+				</Button>
+			</PopoverTrigger>
+			<PopoverContent size="fit" align="start" side="top" className="w-64 p-1">
+				<button
+					type="button"
+					onClick={() => dispatch({ type: "command.selected" })}
+					className="flex w-full items-center gap-3 rounded-sm px-3 py-2 text-left outline-none hover:bg-muted focus-visible:bg-muted"
+					disabled={disabled}
+				>
+					<Icon icon={Application} className="size-4 text-muted-foreground" />
+					<span>
+						<span className="block font-medium text-xs">
+							/{CREATE_AGENT_COMMAND.label}
+						</span>
+						<span className="block text-muted-foreground text-xs">
+							{CREATE_AGENT_COMMAND.description}
+						</span>
+					</span>
+				</button>
+			</PopoverContent>
+		</Popover>
 	);
 }
 
@@ -405,18 +692,21 @@ function ResourceButton({
 	label,
 	detail,
 	imageUrl,
+	disabled,
 	onSelect,
 }: {
 	icon: CarbonIcon;
 	label: string;
 	detail: string | null;
 	imageUrl?: string | null;
+	disabled: boolean;
 	onSelect: () => void;
 }) {
 	return (
 		<button
 			type="button"
 			onClick={onSelect}
+			disabled={disabled}
 			className="flex w-full items-center gap-3 rounded-sm px-3 py-2 text-left outline-none hover:bg-muted focus-visible:bg-muted"
 		>
 			<ChatReferenceIdentity
@@ -433,28 +723,53 @@ function ResourceButton({
 	);
 }
 
-async function addFiles(
+async function readFiles(
 	files: FileList | null,
-	setAttachments: React.Dispatch<React.SetStateAction<BuilderAttachment[]>>,
-) {
-	if (!files) return;
-	const accepted: BuilderAttachment[] = [];
+): Promise<BuilderUploadAttachment[]> {
+	if (!files) return [];
+	const acceptedFiles: File[] = [];
 
 	for (const file of Array.from(files).slice(0, 5)) {
+		if (file.size === 0) {
+			toast.error(`${file.name} is empty.`);
+			continue;
+		}
 		if (file.size > 2_000_000) {
 			toast.error(`${file.name} is larger than 2 MB.`);
 			continue;
 		}
-
-		accepted.push({
-			name: file.name,
-			type: file.type || "application/octet-stream",
-			size: file.size,
-			contentBase64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
-		});
+		if (file.name.length > 180) {
+			toast.error("That file name is too long.");
+			continue;
+		}
+		if (file.type.length > 120) {
+			toast.error(`${file.name} has an unsupported file type.`);
+			continue;
+		}
+		acceptedFiles.push(file);
 	}
 
-	setAttachments((current) => [...current, ...accepted].slice(0, 5));
+	const attachments = await Promise.all(
+		acceptedFiles.map(async (file): Promise<BuilderUploadAttachment | null> => {
+			try {
+				return {
+					name: file.name,
+					type: file.type || "application/octet-stream",
+					size: file.size,
+					contentBase64: bytesToBase64(
+						new Uint8Array(await file.arrayBuffer()),
+					),
+				};
+			} catch {
+				toast.error(`${file.name} could not be read.`);
+				return null;
+			}
+		}),
+	);
+
+	return attachments.filter(
+		(attachment): attachment is BuilderUploadAttachment => attachment !== null,
+	);
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

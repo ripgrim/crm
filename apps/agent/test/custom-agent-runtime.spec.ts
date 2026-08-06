@@ -48,6 +48,34 @@ describe("builder delivery messages", () => {
 			}),
 		).toBe("crm-task");
 	});
+
+	it("delivers persisted attachment bytes with model-visible metadata", () => {
+		const content = Buffer.from("quarterly plan");
+		const message = builderDeliveryMessage(
+			"submission-2",
+			{ text: "Summarize this file", resources: [], attachments: [] },
+			[
+				{
+					name: "plan.txt",
+					mediaType: "text/plain",
+					content,
+				},
+			],
+		);
+
+		expect(message).toEqual([
+			{
+				type: "text",
+				text: "Submission id: submission-2\n\nSummarize this file",
+			},
+			{
+				type: "file",
+				data: content,
+				mediaType: "text/plain",
+				filename: "plan.txt",
+			},
+		]);
+	});
 });
 
 describe("session purpose boundaries", () => {
@@ -80,6 +108,16 @@ describe("builder command routing", () => {
 		expect(chat).toContain("Do not call agent_builder");
 		expect(chat).toContain("call ask_question");
 		expect(chat).toContain("one focused follow-up");
+		expect(chat).toContain(
+			"Do not restate or enumerate individual deal rows in prose, bullets, or tables",
+		);
 		expect(builderTaskMarkdown(null)).toContain("private CRM assistant chat");
+	});
+
+	it("requires the configured model to title only a new builder chat", () => {
+		const untitled = builderTaskMarkdown("CHAT", true);
+		expect(untitled).toContain("call set_chat_title once");
+		expect(untitled).toContain("three to seven words");
+		expect(builderTaskMarkdown("CHAT", false)).not.toContain("set_chat_title");
 	});
 });

@@ -51,14 +51,25 @@ export default defineDynamic({
 
 function builderInstructions(ctx: Parameters<typeof purposeOf>[0]) {
 	return defineInstructions({
-		markdown: builderTaskMarkdown(attribute(ctx, "commandType")),
+		markdown: builderTaskMarkdown(
+			attribute(ctx, "commandType"),
+			attribute(ctx, "needsTitle") === "true",
+		),
 	});
 }
 
-export function builderTaskMarkdown(commandType: string | null): string {
-	return commandType === "CREATE_AGENT"
-		? `This private CRM chat turn used the Create agent command. Call agent_builder exactly once. Pass the complete request, the conversation's relevant decisions, every tagged resource, and your understanding of any attachment. Do not call research tools or mutate CRM records yourself. Relay the specialist's result in concise product language. If the specialist says an essential decision is unclear, call ask_question instead of replying with a plain-text question. Ask exactly one decision at a time and never bundle several missing details into one prompt. Offer two to four mutually exclusive options when they clarify a real choice, and allow a freeform answer when a custom response is valid. After the answer, ask another question only if the build remains materially blocked. Ask only when the answer materially changes the trigger, records, integrations, schedule, outcome, or side effect. Do not interrupt a sufficiently specific request or ask about optional polish. If it saved a draft, explain that it is ready for human review and is not deployed yet.`
-		: `This is a private CRM assistant chat. Answer the user's question directly. Use tagged records as scope and use available read-only CRM and research tools when evidence is needed. If one materially necessary decision is missing, call ask_question with one focused follow-up instead of guessing; do not interrupt for optional detail. Do not call agent_builder, create an agent draft, or mutate CRM records on this turn. The user must explicitly run the Create agent slash command before agent creation begins. Be concise, distinguish CRM evidence from inference, and say when the CRM does not contain the answer.`;
+export function builderTaskMarkdown(
+	commandType: string | null,
+	needsTitle = false,
+): string {
+	const task =
+		commandType === "CREATE_AGENT"
+			? `This private CRM chat turn used the Create agent command. Call agent_builder exactly once. Pass the complete request, the conversation's relevant decisions, every tagged resource, and your understanding of any attachment. Do not call research tools or mutate CRM records yourself. Relay the specialist's result in concise product language. If the specialist says an essential decision is unclear, call ask_question instead of replying with a plain-text question. Ask exactly one decision at a time and never bundle several missing details into one prompt. Offer two to four mutually exclusive options when they clarify a real choice, and allow a freeform answer when a custom response is valid. After the answer, ask another question only if the build remains materially blocked. Ask only when the answer materially changes the trigger, records, integrations, schedule, outcome, or side effect. Do not interrupt a sufficiently specific request or ask about optional polish. If it saved a draft, explain that it is ready for human review and is not deployed yet.`
+			: `This is a private CRM assistant chat. Answer the user's question directly. Use tagged records as scope and use available read-only CRM and research tools when evidence is needed. Use list_deals for pipeline-wide, open-deal, or inactivity questions and follow its pagination until the requested scope is complete. The chat renders list_deals output as a structured deal list. Do not restate or enumerate individual deal rows in prose, bullets, or tables; the structured list is the sole row-level presentation. Give only a concise synthesis, caveats, and useful next actions after the tool results. If one materially necessary decision is missing, call ask_question with one focused follow-up instead of guessing; do not interrupt for optional detail. Do not call agent_builder, create an agent draft, or mutate CRM records on this turn. The user must explicitly run the Create agent slash command before agent creation begins. Be concise, distinguish CRM evidence from inference, and say when the CRM does not contain the answer.`;
+
+	return needsTitle
+		? `Before any other work, call set_chat_title once. Summarize the user's first message as a polished title of three to seven words in sentence case. Capture the intent, remove slash-command syntax and filler, and do not use quotation marks or ending punctuation.\n\n${task}`
+		: task;
 }
 
 function asString(value: unknown): string | null {

@@ -32,15 +32,23 @@ async function PrefetchedAgentBuilderShell({
 }: Readonly<{ children: React.ReactNode }>) {
 	const trpc = getServerTrpc();
 	const queryClient = getServerQueryClient();
+	const conversationsQuery = trpc.conversations.builderList.queryOptions();
+	const agentsQuery = trpc.agents.list.queryOptions();
 
-	await Promise.all([
-		queryClient.prefetchQuery(trpc.conversations.builderList.queryOptions()),
-		queryClient.prefetchQuery(trpc.agents.list.queryOptions()),
+	const [conversations, agents] = await Promise.all([
+		queryClient.fetchQuery(conversationsQuery),
+		queryClient.fetchQuery(agentsQuery),
 	]);
+	const updatedAt = Math.min(
+		queryClient.getQueryState(conversationsQuery.queryKey)?.dataUpdatedAt ?? 0,
+		queryClient.getQueryState(agentsQuery.queryKey)?.dataUpdatedAt ?? 0,
+	);
 
 	return (
 		<HydrateClient>
-			<AgentBuilderShell>{children}</AgentBuilderShell>
+			<AgentBuilderShell sidebarData={{ conversations, agents, updatedAt }}>
+				{children}
+			</AgentBuilderShell>
 		</HydrateClient>
 	);
 }

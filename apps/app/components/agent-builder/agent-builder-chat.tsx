@@ -22,30 +22,44 @@ import {
 import { Button } from "@crm/ui/components/button";
 import { Icon } from "@crm/ui/components/icon";
 import { Markdown } from "@crm/ui/components/markdown";
+import { Reasoning } from "@crm/ui/components/reasoning";
 import { Skeleton } from "@crm/ui/components/skeleton";
 import { cn } from "@crm/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MessageStreamEvent } from "eve/client";
 import type { EveMessage, EveMessageInputRequest } from "eve/react";
 import Link from "next/link";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import {
 	AgentClarificationComposer,
 	type ClarificationResponse,
 } from "@/components/agent-clarification-composer";
+import { LocalDateTime } from "@/components/local-date-time";
 import {
 	consumeBuilderCommand,
 	hasCreateAgentCommand,
 } from "@/lib/agent-builder";
 import {
+	builderConversationIsWorking,
+	completedBuilderSteps,
+	displayedArtifactVersionId,
+	latestCompletedArtifactVersionId,
+	reviewVersionId,
+} from "@/lib/agent-builder-state";
+import {
 	type AgentTurnFailure,
 	conversationTimeline,
+	dealListResultOf,
+	eventStreamSettled,
 	latestTurnFailure,
+	mergeDealListResultPages,
 	messagesFromEvents,
 	pendingQuestion,
+	splitMarkdownTable,
 	toTranscript,
 } from "@/lib/agent-transcript";
+import { isSharedChatToken } from "@/lib/chat-route";
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/types";
 import { useWorkspaceUrl } from "@/lib/use-workspace-url";
@@ -56,11 +70,14 @@ import {
 	ChatCommandChip,
 	ChatReferenceChip,
 } from "./chat-chips";
+import { DealListResultTable } from "./deal-list-result";
+import { DeleteChatAction } from "./delete-chat-action";
 import { ShareChatDialog } from "./share-chat-dialog";
 
 type Conversation = RouterOutputs["conversations"]["builderById"];
 type SharedConversation = RouterOutputs["conversations"]["shared"];
 
+const BUILDER_STEPS = ["Scope", "Instructions", "Manifest", "Review"] as const;
 type DraftVersion = {
 	id: string;
 	status: string;
@@ -82,27 +99,34 @@ export function AgentBuilderChat({
 	conversationId: string;
 }) {
 	const trpc = useTRPC();
-	const workspaceUrl = useWorkspaceUrl();
 	const queryClient = useQueryClient();
+	const sharedChat = isSharedChatToken(conversationId);
 	const conversation = useQuery({
 		...trpc.conversations.builderById.queryOptions({ id: conversationId }),
+		enabled: !sharedChat,
 		refetchInterval: (query) => {
 			const data = query.state.data;
-			return data?.agent?.status === "LIVE" ? 10_000 : 2500;
+			return data && builderConversationNeedsPolling(data) ? 2500 : false;
 		},
 	});
 	const shared = useQuery({
 		...trpc.conversations.shared.queryOptions({ token: conversationId }),
-		enabled: conversation.isError,
-		refetchInterval: 10_000,
+		enabled: sharedChat,
+		refetchInterval: (query) =>
+			sharedConversationNeedsPolling(query.state.data) ? 5000 : false,
 	});
 	const events = useQuery({
 		...trpc.conversations.events.queryOptions({
 			id: conversationId,
 			limit: 5000,
 		}),
-		enabled: Boolean(conversation.data?.sessionId),
-		refetchInterval: 2500,
+		enabled: !sharedChat && Boolean(conversation.data?.sessionId),
+		refetchInterval: (query) =>
+			conversation.data &&
+			(builderConversationNeedsPolling(conversation.data) ||
+				!eventStreamSettled(query.state.data ?? []))
+				? 2500
+				: false,
 	});
 	const submit = useMutation(
 		trpc.conversations.submitBuilder.mutationOptions({
@@ -146,28 +170,20 @@ export function AgentBuilderChat({
 		}),
 	);
 
-	if (conversation.isPending || (conversation.isError && shared.isPending)) {
+	if (sharedChat && shared.isPending) {
 		return <ChatLoading />;
 	}
 
-	if (conversation.isError) {
-		if (shared.data) {
-			return <SharedAgentChat conversation={shared.data} />;
-		}
+	if (sharedChat) {
+		if (shared.data) return <SharedAgentChat conversation={shared.data} />;
 
-		return (
-			<main className="flex flex-1 items-center justify-center p-8">
-				<div className="max-w-md text-center">
-					<h1 className="font-medium text-lg">Chat unavailable</h1>
-					<p className="mt-2 text-muted-foreground text-sm">
-						{conversation.error.message}
-					</p>
-					<Button asChild variant="outline" className="mt-5">
-						<Link href={workspaceUrl("/chat")}>Start a new chat</Link>
-					</Button>
-				</div>
-			</main>
-		);
+		return <ChatUnavailable shared />;
+	}
+
+	if (conversation.isPending) return <ChatLoading />;
+
+	if (conversation.isError) {
+		return <ChatUnavailable />;
 	}
 
 	const data = conversation.data;
@@ -189,13 +205,17 @@ export function AgentBuilderChat({
 			: null;
 	const failure = latestTurnFailure(persistedEvents);
 	const creatingAgent = hasCreateAgentCommand(submissions);
-	const working = isWorking(data, creatingAgent) && !failure;
-	const awaitingInput = events.data?.at(-1)?.type === "session.waiting";
+	const working = builderConversationIsWorking(data) && !failure;
+	const reviewVersion = reviewVersionId(data);
+	const artifactVersion = displayedArtifactVersionId(data, working);
 	const retryPrompt = retryPromptOf(submissions.at(-1));
-	const send = (prompt: BuilderPrompt) => {
-		submit.mutate({
+	const send = async (
+		prompt: BuilderPrompt,
+		clientRequestId = crypto.randomUUID(),
+	) => {
+		await submit.mutateAsync({
 			id: conversationId,
-			clientRequestId: crypto.randomUUID(),
+			clientRequestId,
 			...prompt,
 		});
 	};
@@ -245,6 +265,7 @@ export function AgentBuilderChat({
 							conversationId={conversationId}
 							sessionId={data.sessionId}
 							artifacts={data.builderArtifacts}
+							startedAt={submissions.at(-1)?.createdAt ?? null}
 						/>
 					) : null}
 
@@ -252,13 +273,14 @@ export function AgentBuilderChat({
 						<AgentCodeWorkspace
 							artifacts={data.builderArtifacts}
 							working={working}
+							versionId={artifactVersion}
 						/>
 					) : null}
 
 					{!working &&
 					failure &&
 					creatingAgent &&
-					!reviewable(data) &&
+					!reviewVersion &&
 					data.agent?.status !== "LIVE" ? (
 						<BuilderFailureCard
 							failure={failure}
@@ -277,11 +299,11 @@ export function AgentBuilderChat({
 						/>
 					) : null}
 
-					{creatingAgent && reviewable(data) ? (
-						<ReviewAgentCard conversation={data} />
+					{creatingAgent && !working && reviewVersion ? (
+						<ReviewAgentCard conversation={data} versionId={reviewVersion} />
 					) : null}
 
-					{creatingAgent && data.agent?.status === "LIVE" ? (
+					{creatingAgent && data.agent?.status === "LIVE" && !reviewVersion ? (
 						<DeployedAgentCard
 							conversation={data}
 							onFollowUp={(message) =>
@@ -297,7 +319,7 @@ export function AgentBuilderChat({
 				</div>
 			</div>
 
-			<div className="shrink-0 border-t px-4 py-3 sm:px-5">
+			<div className="min-h-0 shrink overflow-y-auto overscroll-contain border-t px-4 py-3 sm:px-5">
 				<div className="mx-auto w-full max-w-3xl">
 					{question ? (
 						<AgentClarificationComposer
@@ -313,12 +335,7 @@ export function AgentBuilderChat({
 							}}
 						/>
 					) : (
-						<AgentComposer
-							mode="chat"
-							pending={submit.isPending}
-							disabled={working || awaitingInput}
-							onSubmit={send}
-						/>
+						<AgentComposer mode="chat" disabled={working} onSubmit={send} />
 					)}
 				</div>
 			</div>
@@ -337,6 +354,10 @@ function SharedAgentChat({
 	const messages = messagesFromEvents(events);
 	const timeline = conversationTimeline(submissions, events, messages);
 	const answeredQuestionIds = questionResponseIds(submissions);
+	const working = events.length > 0 && !eventStreamSettled(events);
+	const artifactVersion = working
+		? null
+		: latestCompletedArtifactVersionId(conversation.builderArtifacts);
 
 	return (
 		<main className="flex min-h-0 flex-1 flex-col">
@@ -378,7 +399,8 @@ function SharedAgentChat({
 					{conversation.builderArtifacts.length > 0 ? (
 						<AgentCodeWorkspace
 							artifacts={conversation.builderArtifacts}
-							working={false}
+							working={working}
+							versionId={artifactVersion}
 						/>
 					) : null}
 				</div>
@@ -429,6 +451,12 @@ function ChatHeader({
 				</Link>
 			</Button>
 			<ShareChatDialog conversationId={conversation.id} title={title} />
+			<DeleteChatAction
+				conversationId={conversation.id}
+				title={title}
+				trigger="menu"
+				returnToChatList
+			/>
 		</header>
 	);
 }
@@ -510,48 +538,135 @@ function AssistantMessage({
 	const [transcript] = toTranscript([message]);
 	if (!transcript || transcript.mine) return null;
 
-	const markdown = transcript.items
-		.filter((item) => item.kind === "said")
-		.map((item) => item.text)
-		.join("\n\n");
+	const textParts: string[] = [];
+	for (const item of transcript.items) {
+		if (item.kind === "said") textParts.push(item.text);
+	}
+	const markdown = textParts.join("\n\n");
+	const activity = transcript.items.filter(
+		(item) => item.kind === "reasoned" || item.kind === "did",
+	);
+	const reasoningCount = activity.filter(
+		(item) => item.kind === "reasoned",
+	).length;
+	const toolCount = activity.filter((item) => item.kind === "did").length;
+	const dealResults = mergeDealListResultPages(
+		activity.flatMap((item) => {
+			if (item.kind !== "did" || item.tool !== "list_deals") return [];
+			const result = dealListResultOf(item.output);
+			return result ? [result] : [];
+		}),
+	);
+	const dealMarkdown =
+		dealResults.length > 0 ? splitMarkdownTable(markdown) : null;
+	const streaming =
+		message.metadata?.status === "streaming" ||
+		activity.some(
+			(item) =>
+				(item.kind === "reasoned" && item.streaming) ||
+				(item.kind === "did" && item.pending),
+		);
+	const reasoningLabel =
+		reasoningCount > 0 && toolCount > 0
+			? "Reasoning and activity"
+			: reasoningCount > 0
+				? "Reasoning"
+				: "Activity";
 
 	return (
 		<div className="flex w-full min-w-0 max-w-[640px] flex-col gap-2">
-			{markdown ? (
-				<Markdown className="wrap-break-word text-sm leading-5">
-					{markdown}
-				</Markdown>
-			) : null}
-			{transcript.items.map((item) =>
-				item.kind === "asked" &&
-				(conversation === null ||
-					answeredQuestionIds.has(item.question.requestId)) ? (
-					<FollowUpTranscriptItem
-						key={item.id}
-						question={item.question}
-						answered={answeredQuestionIds.has(item.question.requestId)}
-					/>
-				) : null,
-			)}
-			{transcript.items
-				.filter((item) => item.kind === "did")
-				.map((item) => (
-					<div
-						key={item.id}
-						className="flex min-w-0 items-start gap-2 text-muted-foreground text-xs"
-					>
-						{item.pending ? (
-							<Icon
-								icon={Renew}
-								className="size-3.5 animate-spin"
-								motion="none"
-							/>
-						) : (
-							<Icon icon={Checkmark} className="size-3.5 text-ring" />
-						)}
-						<span className="min-w-0 wrap-break-word">{item.label}</span>
+			{activity.length > 0 ? (
+				<Reasoning isStreaming={streaming} label={reasoningLabel}>
+					<div className="flex flex-col gap-3">
+						{activity.map((item) => {
+							if (item.kind === "reasoned") {
+								return (
+									<Markdown key={item.id} className="wrap-break-word leading-5">
+										{item.text}
+									</Markdown>
+								);
+							}
+
+							return (
+								<div key={item.id} className="flex min-w-0 items-start gap-2">
+									{item.pending ? (
+										<Icon
+											icon={Renew}
+											className="size-3.5 animate-spin"
+											motion="none"
+										/>
+									) : item.tone === "warning" ? (
+										<Icon icon={WarningAlt} className="size-3.5 text-warning" />
+									) : (
+										<Icon icon={Checkmark} className="size-3.5 text-ring" />
+									)}
+									<span className="min-w-0 wrap-break-word">{item.label}</span>
+								</div>
+							);
+						})}
 					</div>
-				))}
+				</Reasoning>
+			) : null}
+			{dealMarkdown ? (
+				<>
+					{dealMarkdown.before ? (
+						<Markdown className="wrap-break-word text-sm leading-5">
+							{dealMarkdown.before}
+						</Markdown>
+					) : null}
+					{dealResults.map((result) => (
+						<DealListResultTable
+							key={JSON.stringify(result.criteria)}
+							result={result}
+						/>
+					))}
+					{dealMarkdown.after ? (
+						<Markdown className="wrap-break-word text-sm leading-5">
+							{dealMarkdown.after}
+						</Markdown>
+					) : null}
+					{transcript.items.map((item) =>
+						item.kind === "asked" &&
+						(conversation === null ||
+							answeredQuestionIds.has(item.question.requestId)) ? (
+							<FollowUpTranscriptItem
+								key={item.id}
+								question={item.question}
+								answered={answeredQuestionIds.has(item.question.requestId)}
+							/>
+						) : null,
+					)}
+				</>
+			) : (
+				transcript.items.map((item) => {
+					if (item.kind === "said") {
+						const text = item.text;
+						if (!text) return null;
+
+						return (
+							<Markdown
+								key={item.id}
+								className="wrap-break-word text-sm leading-5"
+							>
+								{text}
+							</Markdown>
+						);
+					}
+
+					if (item.kind === "asked") {
+						return conversation === null ||
+							answeredQuestionIds.has(item.question.requestId) ? (
+							<FollowUpTranscriptItem
+								key={item.id}
+								question={item.question}
+								answered={answeredQuestionIds.has(item.question.requestId)}
+							/>
+						) : null;
+					}
+
+					return null;
+				})
+			)}
 			{markdown ? (
 				conversation ? (
 					<ResponseActions
@@ -582,7 +697,7 @@ function FollowUpTranscriptItem({
 					{answered ? "Answered" : "Waiting for your answer"}
 				</span>
 			</div>
-			<Markdown className="mt-1.5 max-h-24 overflow-y-auto wrap-break-word text-sm leading-5">
+			<Markdown className="mt-1.5 wrap-break-word text-sm leading-5">
 				{question.prompt}
 			</Markdown>
 		</div>
@@ -674,22 +789,14 @@ function BuildingAgentCard({
 	conversationId,
 	sessionId,
 	artifacts,
+	startedAt,
 }: {
 	conversationId: string;
 	sessionId: string | null;
 	artifacts: Conversation["builderArtifacts"];
+	startedAt: string | null;
 }) {
-	const paths = new Set(artifacts.map((artifact) => artifact.path));
-	const completed = paths.has("agent/README.md")
-		? 4
-		: paths.has("agent/manifest.json")
-			? 3
-			: paths.has("agent/instructions.md")
-				? 2
-				: sessionId
-					? 1
-					: 0;
-	const steps = ["Scope", "Instructions", "Manifest", "Review"] as const;
+	const completed = completedBuilderSteps(artifacts, startedAt, sessionId);
 	const stop = useAsyncAction({
 		action: async () => {
 			if (!sessionId) return;
@@ -723,9 +830,10 @@ function BuildingAgentCard({
 					className="flex flex-col gap-1 px-3 py-3"
 					aria-label="Agent creation"
 				>
-					{steps.map((label, index) => {
+					{BUILDER_STEPS.map((label, index) => {
 						const done = index < completed;
-						const active = index === completed && completed < steps.length;
+						const active =
+							index === completed && completed < BUILDER_STEPS.length;
 
 						return (
 							<li
@@ -852,10 +960,18 @@ function BuilderFailureCard({
 	);
 }
 
-function ReviewAgentCard({ conversation }: { conversation: Conversation }) {
+function ReviewAgentCard({
+	conversation,
+	versionId,
+}: {
+	conversation: Conversation;
+	versionId: string;
+}) {
 	const trpc = useTRPC();
 	const queryClient = useQueryClient();
-	const version = conversation.createdVersions[0] as DraftVersion | undefined;
+	const version = conversation.createdVersions.find(
+		(candidate) => candidate.id === versionId,
+	) as DraftVersion | undefined;
 	const agent = conversation.agent;
 	const manifest = manifestOf(version?.manifest);
 	const deploy = useMutation(
@@ -888,9 +1004,13 @@ function ReviewAgentCard({ conversation }: { conversation: Conversation }) {
 			</p>
 			<div className="overflow-hidden rounded-lg border bg-card">
 				<div className="border-b px-4 py-3 sm:px-5 sm:py-4">
-					<h2 className="wrap-break-word font-medium text-sm">{agent.name}</h2>
+					<h2 className="wrap-break-word font-medium text-sm">
+						{manifest.name ?? agent.name}
+					</h2>
 					<p className="mt-0.5 wrap-break-word text-pretty text-muted-foreground text-xs">
-						{agent.description ?? "A durable agent for your team."}
+						{manifest.description ??
+							agent.description ??
+							"A durable agent for your team."}
 					</p>
 				</div>
 				<ReviewRow label="Trigger" value={manifest.trigger} />
@@ -971,7 +1091,7 @@ function DeployedAgentCard({
 	onFollowUp,
 }: {
 	conversation: Conversation;
-	onFollowUp: (message: string) => void;
+	onFollowUp: (message: string) => Promise<void>;
 }) {
 	const trpc = useTRPC();
 	const workspaceUrl = useWorkspaceUrl();
@@ -1029,7 +1149,21 @@ function DeployedAgentCard({
 				<div className="grid border-b sm:grid-cols-3">
 					<DeployedStat
 						label="Next run"
-						value={nextRun ? formatNextRun(nextRun) : "Manual only"}
+						value={
+							nextRun ? (
+								<LocalDateTime
+									date={nextRun}
+									options={{
+										weekday: "short",
+										hour: "numeric",
+										minute: "2-digit",
+										timeZoneName: "short",
+									}}
+								/>
+							) : (
+								"Manual only"
+							)
+						}
 					/>
 					<DeployedStat label="Execution" value="Vercel · Eve · Sandbox" />
 					<DeployedStat label="Available to" value="Everyone in Comp AI" last />
@@ -1067,7 +1201,7 @@ function DeployedAgentCard({
 						<button
 							key={suggestion}
 							type="button"
-							onClick={() => onFollowUp(suggestion)}
+							onClick={() => void onFollowUp(suggestion)}
 							className="flex w-full items-center gap-3 border-t py-2.5 text-left outline-none hover:bg-muted/50 focus-visible:bg-muted/50"
 						>
 							<span className="min-w-0 flex-1 wrap-break-word text-sm">
@@ -1091,7 +1225,7 @@ function DeployedStat({
 	last = false,
 }: {
 	label: string;
-	value: string;
+	value: ReactNode;
 	last?: boolean;
 }) {
 	return (
@@ -1128,6 +1262,26 @@ function ChatLoading() {
 			<span role="status" className="sr-only">
 				Loading chat
 			</span>
+		</main>
+	);
+}
+
+function ChatUnavailable({ shared = false }: { shared?: boolean }) {
+	const workspaceUrl = useWorkspaceUrl();
+
+	return (
+		<main className="flex flex-1 items-center justify-center p-8">
+			<div className="max-w-md text-center">
+				<h1 className="font-medium text-lg">Chat unavailable</h1>
+				<p className="mt-2 text-muted-foreground text-sm">
+					{shared
+						? "This shared chat no longer exists or is not available."
+						: "This chat does not exist or you do not have access to it."}
+				</p>
+				<Button asChild variant="outline" className="mt-5">
+					<Link href={workspaceUrl("/chat")}>Start a new chat</Link>
+				</Button>
+			</div>
 		</main>
 	);
 }
@@ -1207,29 +1361,16 @@ function retryPromptOf(
 	};
 }
 
-function isWorking(
-	conversation: Conversation,
-	creatingAgent: boolean,
-): boolean {
-	if (
-		(creatingAgent && conversation.agent?.status === "LIVE") ||
-		(creatingAgent && conversation.createdVersions[0]?.status === "READY")
-	) {
-		return false;
-	}
-
-	return (
-		conversation.submissions.some((submission) =>
-			["PENDING", "SENDING"].includes(submission.status),
-		) || Boolean(conversation.sessionId && !conversation.continuationToken)
-	);
+function builderConversationNeedsPolling(conversation: Conversation): boolean {
+	return builderConversationIsWorking(conversation);
 }
 
-function reviewable(conversation: Conversation): boolean {
-	return (
-		conversation.agent?.status !== "LIVE" &&
-		conversation.createdVersions[0]?.status === "READY"
-	);
+function sharedConversationNeedsPolling(
+	conversation: SharedConversation | undefined,
+): boolean {
+	if (!conversation?.events.length) return false;
+
+	return !eventStreamSettled(conversation.events);
 }
 
 function manifestOf(value: unknown) {
@@ -1244,6 +1385,14 @@ function manifestOf(value: unknown) {
 		: [];
 
 	return {
+		name:
+			typeof manifest.name === "string" && manifest.name.trim()
+				? manifest.name.trim()
+				: null,
+		description:
+			typeof manifest.description === "string" && manifest.description.trim()
+				? manifest.description.trim()
+				: null,
 		trigger: textOf(trigger.summary, "Manual or configured schedule"),
 		looksAt: textOf(dataScope.summary, "CRM records in the approved scope"),
 		action: textOf(actions[0]?.summary, "Perform the requested team action"),
@@ -1259,13 +1408,4 @@ function recordOf(value: unknown): Record<string, unknown> {
 
 function textOf(value: unknown, fallback: string): string {
 	return typeof value === "string" && value.trim() ? value : fallback;
-}
-
-function formatNextRun(value: string): string {
-	return new Intl.DateTimeFormat(undefined, {
-		weekday: "short",
-		hour: "numeric",
-		minute: "2-digit",
-		timeZoneName: "short",
-	}).format(new Date(value));
 }

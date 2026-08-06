@@ -2,11 +2,24 @@ import { Skeleton } from "@crm/ui/components/skeleton";
 import { Suspense } from "react";
 import { AgentBuilderSidebar } from "./agent-builder-sidebar";
 
-export function AgentBuilderShell({ children }: { children: React.ReactNode }) {
+type SidebarData = React.ComponentProps<
+	typeof AgentBuilderSidebar
+>["initialData"];
+
+export function AgentBuilderShell({
+	children,
+	sidebarData,
+}: {
+	children: React.ReactNode;
+	sidebarData?: SidebarData;
+}) {
 	return (
 		<div className="flex min-h-0 min-w-0 flex-1">
 			<Suspense fallback={<AgentBuilderSidebarFallback />}>
-				<AgentBuilderSidebar className="hidden w-[213px] flex-none border-r md:flex" />
+				<AgentBuilderSidebar
+					className="hidden w-[213px] flex-none border-r md:flex"
+					initialData={sidebarData}
+				/>
 			</Suspense>
 			<div className="flex min-w-0 flex-1 flex-col">{children}</div>
 		</div>

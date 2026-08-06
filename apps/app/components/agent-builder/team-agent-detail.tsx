@@ -34,6 +34,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
+import {
+	PageShell,
+	PageShellActions,
+	PageShellContent,
+	PageShellDescription,
+	PageShellHeader,
+	PageShellHeading,
+	PageShellTitle,
+} from "@/components/page-shell";
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/types";
 import { useWorkspaceUrl } from "@/lib/use-workspace-url";
@@ -54,18 +63,55 @@ type ActivityRow = Omit<Activity[number], "before" | "after"> & {
 	before: unknown;
 	after: unknown;
 };
+const DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+	month: "short",
+	day: "numeric",
+	hour: "numeric",
+	minute: "2-digit",
+	second: "2-digit",
+	timeZone: "UTC",
+	timeZoneName: "short",
+});
+const TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+	hour: "2-digit",
+	minute: "2-digit",
+	second: "2-digit",
+	hour12: false,
+	timeZone: "UTC",
+});
 
-export function TeamAgentDetail({ agentId }: { agentId: string }) {
+export function TeamAgentDetail({
+	agentId,
+	initialAgent,
+	initialRuns,
+	initialActivity,
+}: {
+	agentId: string;
+	initialAgent: AgentDetail;
+	initialRuns: Runs;
+	initialActivity: Activity;
+}) {
 	const trpc = useTRPC();
 	const queryClient = useQueryClient();
 	const [tab, setTab] = useState<AgentTab>("runs");
-	const agent = useQuery(trpc.agents.byId.queryOptions({ id: agentId }));
-	const runs = useQuery(
-		trpc.agents.history.queryOptions({ id: agentId, limit: 50 }),
-	);
-	const activity = useQuery(
-		trpc.agents.activity.queryOptions({ id: agentId, limit: 100 }),
-	);
+	const agent = useQuery({
+		...trpc.agents.byId.queryOptions({ id: agentId }),
+		initialData: initialAgent,
+	});
+	const runs = useQuery({
+		...trpc.agents.history.queryOptions({ id: agentId, limit: 50 }),
+		initialData: initialRuns,
+		refetchInterval: (query) =>
+			query.state.data?.some((run) =>
+				["QUEUED", "RUNNING"].includes(run.status),
+			)
+				? 2500
+				: false,
+	});
+	const activity = useQuery({
+		...trpc.agents.activity.queryOptions({ id: agentId, limit: 100 }),
+		initialData: initialActivity,
+	});
 	const invalidate = () =>
 		Promise.all([
 			queryClient.invalidateQueries({ queryKey: trpc.agents.byId.pathKey() }),
@@ -111,31 +157,34 @@ export function TeamAgentDetail({ agentId }: { agentId: string }) {
 
 	if (agent.isPending) {
 		return (
-			<main
-				className="min-h-0 min-w-0 flex-1 overflow-hidden px-4 py-6 sm:px-6 sm:py-10"
-				aria-busy="true"
-			>
-				<div className="mx-auto flex w-full max-w-[1040px] flex-col gap-6">
-					<div className="flex flex-col gap-3">
+			<PageShell className="min-h-0" aria-busy="true">
+				<PageShellHeader>
+					<PageShellHeading>
 						<Skeleton className="h-8 w-72 max-w-full" />
 						<Skeleton className="h-4 w-[520px] max-w-full" />
-						<Skeleton className="h-3 w-56 max-w-full" />
-					</div>
+					</PageShellHeading>
+				</PageShellHeader>
+				<PageShellContent>
 					<Skeleton className="h-9 w-full" />
 					<Skeleton className="h-56 w-full" />
-				</div>
+				</PageShellContent>
 				<span role="status" className="sr-only">
 					Loading agent
 				</span>
-			</main>
+			</PageShell>
 		);
 	}
 
 	if (agent.isError) {
 		return (
-			<main className="flex flex-1 items-center justify-center p-8 text-center">
-				<p className="text-muted-foreground text-sm">{agent.error.message}</p>
-			</main>
+			<PageShell>
+				<PageShellHeader>
+					<PageShellHeading>
+						<PageShellTitle>Agent unavailable</PageShellTitle>
+						<PageShellDescription>{agent.error.message}</PageShellDescription>
+					</PageShellHeading>
+				</PageShellHeader>
+			</PageShell>
 		);
 	}
 
@@ -143,22 +192,24 @@ export function TeamAgentDetail({ agentId }: { agentId: string }) {
 	const nextRun = data.triggers.find((trigger) => trigger.enabled)?.nextRunAt;
 
 	return (
-		<main className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-10">
-			<div className="mx-auto flex w-full min-w-0 max-w-[1040px] flex-col gap-6">
-				<div className="flex min-w-0 flex-col items-stretch gap-6 sm:flex-row sm:items-start sm:justify-between sm:gap-8">
-					<div className="min-w-0 max-w-[650px]">
-						<h1 className="wrap-break-word text-balance font-semibold text-2xl tracking-tight sm:text-3xl">
-							{data.name}
-						</h1>
-						<p className="mt-3 wrap-break-word text-pretty text-muted-foreground text-sm leading-6">
+		<PageShell className="min-h-0">
+			<PageShellHeader className="[&>div]:grid-cols-1 sm:[&>div]:grid-cols-[minmax(0,1fr)_auto]">
+				<PageShellHeading>
+					<PageShellTitle className="wrap-break-word">
+						{data.name}
+					</PageShellTitle>
+					<PageShellDescription className="wrap-break-word leading-6">
+						<span className="block">
 							{data.description ?? "A durable team automation."}
-						</p>
-						<p className="mt-3 wrap-break-word text-muted-foreground text-xs">
+						</span>
+						<span className="mt-2 block text-xs">
 							Created by {data.createdBy.name} · Team agent · Version{" "}
 							{data.currentVersion?.number ?? "—"}
-						</p>
-					</div>
-					<div className="flex min-w-0 flex-col items-start gap-2 sm:shrink-0 sm:items-end">
+						</span>
+					</PageShellDescription>
+				</PageShellHeading>
+				<PageShellActions className="col-start-1 row-start-3 justify-self-start sm:col-start-2 sm:row-start-1 sm:justify-self-end">
+					<div className="flex min-w-0 flex-col items-start gap-2 sm:items-end">
 						<span className="text-muted-foreground text-xs">Next run</span>
 						<span className="font-mono text-sm">
 							{nextRun ? formatDate(nextRun) : "Manual only"}
@@ -221,8 +272,10 @@ export function TeamAgentDetail({ agentId }: { agentId: string }) {
 							) : null}
 						</div>
 					</div>
-				</div>
+				</PageShellActions>
+			</PageShellHeader>
 
+			<PageShellContent className="min-h-0">
 				<div className="flex h-9 min-w-0 items-end gap-5 overflow-x-auto border-b sm:gap-6">
 					<TabButton
 						active={tab === "overview"}
@@ -252,8 +305,8 @@ export function TeamAgentDetail({ agentId }: { agentId: string }) {
 				{tab === "activity" ? (
 					<AgentActivity activity={activity.data ?? []} />
 				) : null}
-			</div>
-		</main>
+			</PageShellContent>
+		</PageShell>
 	);
 }
 
@@ -692,29 +745,19 @@ function humanStatus(value: string): string {
 }
 
 function formatDate(value: string): string {
-	return new Intl.DateTimeFormat(undefined, {
-		month: "short",
-		day: "numeric",
-		hour: "numeric",
-		minute: "2-digit",
-		second: "2-digit",
-	}).format(new Date(value));
+	return DATE_FORMATTER.format(new Date(value));
 }
 
 function formatTime(value: string): string {
-	return new Intl.DateTimeFormat(undefined, {
-		hour: "2-digit",
-		minute: "2-digit",
-		second: "2-digit",
-		hour12: false,
-	}).format(new Date(value));
+	return TIME_FORMATTER.format(new Date(value));
 }
 
 function duration(startedAt: string | null, finishedAt: string | null): string {
 	if (!startedAt) return "—";
+	if (!finishedAt) return "In progress";
+
 	const milliseconds =
-		(finishedAt ? new Date(finishedAt) : new Date()).getTime() -
-		new Date(startedAt).getTime();
+		new Date(finishedAt).getTime() - new Date(startedAt).getTime();
 	return `${Math.max(0, milliseconds / 1000).toFixed(1)}s`;
 }
 

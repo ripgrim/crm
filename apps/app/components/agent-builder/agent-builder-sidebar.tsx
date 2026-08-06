@@ -11,20 +11,29 @@ import { cn } from "@crm/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { type ChatDateGroup, chatDateGroup } from "@/lib/chat-date-group";
 import { useTRPC } from "@/lib/trpc/client";
 import type { RouterOutputs } from "@/lib/trpc/types";
 import { useHydrated } from "@/lib/use-hydrated";
 import { useWorkspaceUrl } from "@/lib/use-workspace-url";
+import { DeleteChatAction } from "./delete-chat-action";
 
 type Conversation = RouterOutputs["conversations"]["builderList"][number];
 type TeamAgent = RouterOutputs["agents"]["list"][number];
+type SidebarData = {
+	conversations: Conversation[];
+	agents: TeamAgent[];
+	updatedAt: number;
+};
 
 export function AgentBuilderSidebar({
 	className,
 	onNavigate,
+	initialData,
 }: {
 	className?: string;
 	onNavigate?: () => void;
+	initialData?: SidebarData;
 }) {
 	const pathname = usePathname();
 	const workspaceUrl = useWorkspaceUrl();
@@ -33,11 +42,18 @@ export function AgentBuilderSidebar({
 	const hydrated = useHydrated();
 	const conversations = useQuery({
 		...trpc.conversations.builderList.queryOptions(),
-		refetchInterval: 5000,
+		initialData: initialData?.conversations,
+		initialDataUpdatedAt: initialData?.updatedAt,
+		refetchInterval: (query) =>
+			query.state.data?.some((conversation) => conversation.state === "working")
+				? 2500
+				: 30_000,
 	});
 	const agents = useQuery({
 		...trpc.agents.list.queryOptions(),
-		refetchInterval: 10_000,
+		initialData: initialData?.agents,
+		initialDataUpdatedAt: initialData?.updatedAt,
+		refetchInterval: 60_000,
 	});
 	const markRead = useMutation(
 		trpc.conversations.markRead.mutationOptions({
@@ -48,8 +64,16 @@ export function AgentBuilderSidebar({
 		}),
 	);
 
-	const groups = groupConversations(hydrated ? (conversations.data ?? []) : []);
-	const teamAgents = hydrated ? (agents.data ?? []) : [];
+	const showData = Boolean(initialData) || hydrated;
+	const groupNow =
+		initialData && !hydrated
+			? initialData.updatedAt
+			: conversations.dataUpdatedAt;
+	const groups = groupConversations(
+		showData ? (conversations.data ?? []) : [],
+		showData ? groupNow : 0,
+	);
+	const teamAgents = showData ? (agents.data ?? []) : [];
 
 	return (
 		<aside className={cn("min-h-0 min-w-0 flex-col p-4 font-sans", className)}>
@@ -75,30 +99,41 @@ export function AgentBuilderSidebar({
 						{group.items.map((conversation) => {
 							const href = workspaceUrl(`/chat/${conversation.id}`);
 							const active = pathname === href;
+							const title = conversation.title ?? "Untitled chat";
 							return (
-								<Link
+								<div
 									key={conversation.id}
-									href={href}
-									aria-current={active ? "page" : undefined}
-									onClick={() => {
-										if (conversation.unread) {
-											markRead.mutate({ id: conversation.id });
-										}
-										onNavigate?.();
-									}}
-									className={cn(
-										"flex h-7 items-center gap-3 rounded-sm px-2 text-xs outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60",
-										active && "bg-muted font-medium",
-										!active &&
-											conversation.state === "idle" &&
-											"text-muted-foreground",
-									)}
+									className="group relative flex h-7 min-w-0 items-center"
 								>
-									<ConversationState state={conversation.state} />
-									<span className="min-w-0 flex-1 truncate">
-										{conversation.title ?? "Untitled chat"}
-									</span>
-								</Link>
+									<Link
+										href={href}
+										aria-current={active ? "page" : undefined}
+										onClick={() => {
+											if (conversation.unread) {
+												markRead.mutate({ id: conversation.id });
+											}
+											onNavigate?.();
+										}}
+										className={cn(
+											"flex h-7 min-w-0 flex-1 items-center gap-3 rounded-sm pr-8 pl-2 text-xs outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/60",
+											active && "bg-muted font-medium",
+											!active &&
+												conversation.state === "idle" &&
+												"text-muted-foreground",
+										)}
+									>
+										<ConversationState state={conversation.state} />
+										<span className="min-w-0 flex-1 truncate">{title}</span>
+									</Link>
+									<DeleteChatAction
+										conversationId={conversation.id}
+										title={title}
+										trigger="close"
+										returnToChatList={active}
+										onDeleted={active ? onNavigate : undefined}
+										className="absolute right-1 opacity-100 transition-opacity duration-150 [@media(hover:hover)]:pointer-events-none [@media(hover:hover)]:translate-x-1 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-focus-within:pointer-events-auto [@media(hover:hover)]:group-focus-within:translate-x-0 [@media(hover:hover)]:group-focus-within:opacity-100 [@media(hover:hover)]:group-hover:pointer-events-auto [@media(hover:hover)]:group-hover:translate-x-0 [@media(hover:hover)]:group-hover:opacity-100 motion-safe:transition-[opacity,translate] motion-reduce:translate-x-0"
+									/>
+								</div>
 							);
 						})}
 					</div>
@@ -191,31 +226,25 @@ function ConversationState({ state }: { state: Conversation["state"] }) {
 		);
 	}
 
-	return <span className="size-5 shrink-0" />;
+	return null;
 }
 
-function groupConversations(conversations: Conversation[]) {
-	const todayStart = new Date();
-	todayStart.setHours(0, 0, 0, 0);
-	const yesterdayStart = new Date(todayStart);
-	yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-	const lastWeekStart = new Date(todayStart);
-	lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+function groupConversations(conversations: Conversation[], now: number) {
+	if (!now) return [];
 
-	const today = { label: "Today", items: [] as Conversation[] };
-	const yesterday = { label: "Yesterday", items: [] as Conversation[] };
-	const recent = { label: "Last 7 days", items: [] as Conversation[] };
+	const labels: ChatDateGroup[] = ["Today", "Yesterday", "Last 7 days"];
+	const items: Record<ChatDateGroup, Conversation[]> = {
+		Today: [],
+		Yesterday: [],
+		"Last 7 days": [],
+	};
 
 	for (const conversation of conversations) {
-		const lastMessageAt = new Date(conversation.lastMessageAt);
-		if (lastMessageAt >= todayStart) {
-			today.items.push(conversation);
-		} else if (lastMessageAt >= yesterdayStart) {
-			yesterday.items.push(conversation);
-		} else if (lastMessageAt >= lastWeekStart) {
-			recent.items.push(conversation);
-		}
+		const label = chatDateGroup(conversation.lastMessageAt, now);
+		if (label) items[label].push(conversation);
 	}
 
-	return [today, yesterday, recent].filter((group) => group.items.length > 0);
+	return labels
+		.map((label) => ({ label, items: items[label] }))
+		.filter((group) => group.items.length > 0);
 }

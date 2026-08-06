@@ -13,10 +13,12 @@ export type ChatChipResource = {
 };
 
 export type ChatChipAttachment = {
+	id?: string;
 	name: string;
 	type: string;
 	size: number;
 	contentBase64?: string;
+	previewUrl?: string | null;
 };
 
 export function ChatReferenceChip({
@@ -83,15 +85,19 @@ export function ChatAttachmentChip({
 	attachment: ChatChipAttachment;
 	onRemove?: () => void;
 }) {
-	const image =
-		attachment.type.startsWith("image/") && attachment.contentBase64;
+	const image = isPreviewableImage(attachment.type)
+		? (attachment.previewUrl ??
+			(attachment.contentBase64
+				? `data:${attachment.type};base64,${attachment.contentBase64}`
+				: null))
+		: null;
 
 	return (
 		<span className="flex min-w-0 max-w-full items-center gap-2 rounded-md border bg-background py-1 pr-2 pl-1 text-left shadow-xs">
 			<span className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-sm bg-muted text-muted-foreground">
 				{image ? (
 					<Image
-						src={`data:${attachment.type};base64,${attachment.contentBase64}`}
+						src={image}
 						alt=""
 						width={24}
 						height={24}
@@ -155,4 +161,10 @@ function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
 	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isPreviewableImage(mediaType: string): boolean {
+	return ["image/gif", "image/jpeg", "image/png", "image/webp"].includes(
+		mediaType.toLowerCase(),
+	);
 }

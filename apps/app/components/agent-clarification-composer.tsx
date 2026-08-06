@@ -1,19 +1,27 @@
 "use client";
 
 import { AsyncButtonContent } from "@crm/ui/components/async-action";
-import { Button } from "@crm/ui/components/button";
-import { Markdown } from "@crm/ui/components/markdown";
-import { Textarea } from "@crm/ui/components/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@crm/ui/components/toggle-group";
+import {
+	Questionnaire,
+	QuestionnaireActions,
+	QuestionnaireChoice,
+	QuestionnaireChoices,
+	QuestionnaireDescription,
+	QuestionnaireError,
+	QuestionnaireInput,
+	QuestionnaireItem,
+	QuestionnaireSubmit,
+	QuestionnaireTitle,
+} from "@crm/ui/components/questionnaire";
 import type { EveMessageInputRequest } from "eve/react";
-import { useId, useState } from "react";
+import { type FormEvent, useState } from "react";
 import { AGENT_COMPOSER_CLASS_NAME } from "./agent-composer-frame";
 
-export type ClarificationResponse = {
-	requestId: string;
-	optionId?: string;
-	text?: string;
-};
+const OPTION_VALUE_PREFIX = "option:";
+
+export type ClarificationResponse =
+	| { requestId: string; optionId: string; text?: never }
+	| { requestId: string; optionId?: never; text: string };
 
 export function AgentClarificationComposer({
 	question,
@@ -24,139 +32,104 @@ export function AgentClarificationComposer({
 	pending: boolean;
 	onSubmit: (response: ClarificationResponse) => Promise<void>;
 }) {
-	const answerId = useId();
-	const errorId = `${answerId}-error`;
-	const [selectedOptionId, setSelectedOptionId] = useState("");
-	const [answer, setAnswer] = useState("");
-	const [error, setError] = useState<string | null>(null);
 	const options = question.options ?? [];
+	const [transportError, setTransportError] = useState<string | null>(null);
 	const showFreeform =
 		question.display === "text" ||
 		question.allowFreeform === true ||
 		options.length === 0;
-	const selectedOption = options.find(
-		(option) => option.id === selectedOptionId,
-	);
+	const items = [
+		{
+			name: "response",
+			required: true,
+			choices: options.map((option) => ({
+				disabled: pending,
+				value: `${OPTION_VALUE_PREFIX}${option.id}`,
+			})),
+		},
+	];
 
-	const submit = async () => {
+	const submit = async (event: FormEvent<HTMLFormElement>) => {
+		event.preventDefault();
 		if (pending) return;
-		const text = answer.trim();
-		if (!selectedOptionId && !text) {
-			setError(
-				options.length > 0
-					? "Choose an answer before submitting."
-					: "Write an answer before submitting.",
-			);
-			return;
-		}
-
-		setError(null);
+		const value = String(
+			new FormData(event.currentTarget).get("response") ?? "",
+		).trim();
+		if (!value) return;
+		const optionId = value.startsWith(OPTION_VALUE_PREFIX)
+			? value.slice(OPTION_VALUE_PREFIX.length)
+			: null;
+		const selectedOption = options.find((option) => option.id === optionId);
+		setTransportError(null);
 		try {
-			await onSubmit(
-				selectedOptionId
-					? { requestId: question.requestId, optionId: selectedOptionId }
-					: { requestId: question.requestId, text },
-			);
+			const response = (
+				selectedOption
+					? { requestId: question.requestId, optionId: selectedOption.id }
+					: { requestId: question.requestId, text: value }
+			) satisfies ClarificationResponse;
+			await onSubmit(response);
 		} catch {
-			setError("Unable to submit. Check your connection and try again.");
+			setTransportError(
+				"Unable to submit. Check your connection and try again.",
+			);
 		}
 	};
 
 	return (
-		<form
+		<Questionnaire
 			className={AGENT_COMPOSER_CLASS_NAME}
-			onSubmit={(event) => {
-				event.preventDefault();
-				void submit();
-			}}
+			defaultItem="response"
+			items={items}
+			shortcuts="letters"
+			onSubmit={(event) => void submit(event)}
 		>
-			<div className="px-1 pt-0.5">
-				<p className="font-medium text-xs">Quick follow-up</p>
-				<Markdown className="mt-1 max-h-32 overflow-y-auto text-pretty text-sm leading-5">
-					{question.prompt}
-				</Markdown>
-			</div>
-
-			{options.length > 0 ? (
-				<div className="mt-2">
-					<ToggleGroup
-						type="single"
-						orientation="vertical"
-						variant="outline"
-						size="choice"
-						spacing={1}
-						value={selectedOptionId}
-						disabled={pending}
-						onValueChange={(value) => {
-							setSelectedOptionId(value);
-							if (value) setAnswer("");
-							setError(null);
-						}}
-					>
-						{options.map((option) => (
-							<ToggleGroupItem key={option.id} value={option.id}>
-								<span className="w-full wrap-break-word font-medium leading-4">
-									{option.label}
-								</span>
-								{option.description ? (
-									<span className="w-full wrap-break-word font-normal text-[11px] text-muted-foreground leading-4">
-										{option.description}
-									</span>
-								) : null}
-							</ToggleGroupItem>
-						))}
-					</ToggleGroup>
-				</div>
-			) : null}
-
-			{showFreeform ? (
-				<div className="mt-2 px-1">
-					<label
-						htmlFor={answerId}
-						className="font-medium text-muted-foreground text-xs"
-					>
-						{options.length > 0 ? "Or write an answer" : "Your answer"}
-						<Textarea
-							id={answerId}
-							value={answer}
-							onChange={(event) => {
-								setAnswer(event.target.value);
-								if (event.target.value) setSelectedOptionId("");
-								setError(null);
-							}}
-							placeholder="Add the detail the agent needs"
-							variant="composer"
-							size="composer"
-							rows={1}
+			<QuestionnaireItem name="response" required>
+				<QuestionnaireTitle>{question.prompt}</QuestionnaireTitle>
+				<QuestionnaireDescription>
+					{options.length > 0
+						? "Choose an answer, then submit."
+						: "Add the detail the agent needs to continue."}
+				</QuestionnaireDescription>
+				<QuestionnaireChoices>
+					{options.map((option) => (
+						<QuestionnaireChoice
+							key={option.id}
+							value={`${OPTION_VALUE_PREFIX}${option.id}`}
 							disabled={pending}
-							aria-invalid={Boolean(error)}
-							aria-describedby={error ? errorId : undefined}
+						>
+							<span className="font-medium">{option.label}</span>
+							{option.description ? (
+								<span className="text-muted-foreground">
+									{option.description}
+								</span>
+							) : null}
+						</QuestionnaireChoice>
+					))}
+					{showFreeform ? (
+						<QuestionnaireInput
+							aria-label={options.length > 0 ? "Another answer" : "Your answer"}
+							placeholder="Add the detail the agent needs"
+							disabled={pending}
 						/>
-					</label>
-				</div>
+					) : null}
+				</QuestionnaireChoices>
+				<QuestionnaireError />
+			</QuestionnaireItem>
+			{transportError ? (
+				<p role="alert" className="text-destructive text-xs">
+					{transportError}
+				</p>
 			) : null}
-
-			<div className="mt-2 flex min-h-7 items-center justify-between gap-3 px-1">
-				{error ? (
-					<p id={errorId} role="alert" className="text-destructive text-xs">
-						{error}
-					</p>
-				) : (
-					<p className="min-w-0 truncate text-muted-foreground text-xs">
-						{selectedOption
-							? `Selected: ${selectedOption.label}`
-							: "Choose an answer, then submit."}
-					</p>
-				)}
-				<Button type="submit" size="sm" disabled={pending} aria-busy={pending}>
+			<QuestionnaireActions>
+				<QuestionnaireSubmit disabled={pending} aria-busy={pending} size="sm">
 					<AsyncButtonContent
 						status={pending ? "pending" : "idle"}
 						pendingLabel="Submitting"
 					>
 						Submit answer
 					</AsyncButtonContent>
-				</Button>
-			</div>
-		</form>
+				</QuestionnaireSubmit>
+			</QuestionnaireActions>
+		</Questionnaire>
 	);
 }

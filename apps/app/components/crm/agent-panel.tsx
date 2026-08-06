@@ -46,7 +46,7 @@ import {
 import { Spinner } from "@crm/ui/components/spinner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEveAgent } from "eve/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { AgentClarificationComposer } from "@/components/agent-clarification-composer";
 import {
 	type Conversation,
@@ -83,18 +83,35 @@ export function AgentPanel({ record }: { record: AgentRecord }) {
 
 	const history = conversations.data ?? [];
 
-	const landedOn = useRef<string | null>(null);
-	if (landedOn.current === null && conversations.isSuccess) {
-		landedOn.current = history[0]?.id ?? NEW_THREAD;
-	}
+	if (conversations.isPending) return <Loading />;
 
+	return (
+		<LoadedAgentPanel
+			record={record}
+			history={history}
+			thread={thread}
+			setThread={setThread}
+		/>
+	);
+}
+
+function LoadedAgentPanel({
+	record,
+	history,
+	thread,
+	setThread,
+}: {
+	record: AgentRecord;
+	history: Conversation[];
+	thread: string | null;
+	setThread: (thread: string) => void;
+}) {
+	const [landedOn] = useState(() => history[0]?.id ?? NEW_THREAD);
 	const { openId, current } = resolveThread({
 		conversations: history,
 		fromUrl: thread,
-		landedOn: landedOn.current,
+		landedOn,
 	});
-
-	if (conversations.isPending) return <Loading />;
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
@@ -395,12 +412,14 @@ function Item({ item }: { item: TranscriptItem }) {
 		return (
 			<div className="w-full max-w-sm border-ring/50 border-l-2 bg-muted/40 px-3 py-2.5">
 				<p className="font-medium text-xs">Follow-up</p>
-				<Markdown className="mt-1.5 max-h-24 overflow-y-auto wrap-break-word text-sm leading-5">
+				<Markdown className="mt-1.5 wrap-break-word text-sm leading-5">
 					{item.question.prompt}
 				</Markdown>
 			</div>
 		);
 	}
+
+	if (item.kind === "reasoned") return null;
 
 	return (
 		<div className="min-w-0 space-y-1.5">
@@ -477,10 +496,29 @@ function useSavedConversation({
 
 	const isNew = conversation === null || conversation.sessionId !== sessionId;
 
-	const latest = useRef({ save, queryClient, trpc, opening });
-	latest.current = { save, queryClient, trpc, opening };
-
 	const written = useRef<string | null>(null);
+	const persist = useEffectEvent(() => {
+		save.mutate(
+			{
+				...(contactId ? { contactId } : {}),
+				...(companyId ? { companyId } : {}),
+				...(dealId ? { dealId } : {}),
+				sessionId: sessionId ?? "",
+				continuationToken: token,
+				streamIndex,
+				messageCount: messages,
+				...(isNew ? { title: opening.current ?? undefined } : {}),
+			},
+			{
+				onSuccess: () => {
+					if (!isNew) return;
+					void queryClient.invalidateQueries({
+						queryKey: trpc.conversations.list.pathKey(),
+					});
+				},
+			},
+		);
+	});
 
 	useEffect(() => {
 		if (!sessionId) return;
@@ -488,42 +526,6 @@ function useSavedConversation({
 		const cursor = `${sessionId}:${token ?? ""}:${messages}`;
 		if (written.current === cursor) return;
 		written.current = cursor;
-
-		const {
-			save: mutation,
-			queryClient: cache,
-			trpc: api,
-			opening: title,
-		} = latest.current;
-
-		mutation.mutate(
-			{
-				...(contactId ? { contactId } : {}),
-				...(companyId ? { companyId } : {}),
-				...(dealId ? { dealId } : {}),
-				sessionId,
-				continuationToken: token,
-				streamIndex,
-				messageCount: messages,
-				...(isNew ? { title: title.current ?? undefined } : {}),
-			},
-			{
-				onSuccess: () => {
-					if (!isNew) return;
-					void cache.invalidateQueries({
-						queryKey: api.conversations.list.pathKey(),
-					});
-				},
-			},
-		);
-	}, [
-		sessionId,
-		token,
-		streamIndex,
-		messages,
-		contactId,
-		companyId,
-		dealId,
-		isNew,
-	]);
+		persist();
+	}, [sessionId, token, messages]);
 }

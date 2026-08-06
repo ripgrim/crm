@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { AgentBuilderChat } from "@/components/agent-builder/agent-builder-chat";
+import { isSharedChatToken } from "@/lib/chat-route";
 import { getServerQueryClient, getServerTrpc } from "@/lib/trpc/server";
 
 export const metadata: Metadata = { title: "Agent chat" };
@@ -25,10 +26,19 @@ async function PrefetchedAgentChat({
 	const { chatId } = await params;
 	const trpc = getServerTrpc();
 	const queryClient = getServerQueryClient();
+	const sharedChat = isSharedChatToken(chatId);
 
-	await queryClient.prefetchQuery(
-		trpc.conversations.builderById.queryOptions({ id: chatId }),
-	);
+	if (sharedChat) {
+		await queryClient.prefetchQuery(
+			trpc.conversations.shared.queryOptions({ token: chatId }),
+		);
+	} else {
+		await queryClient.prefetchQuery(
+			trpc.conversations.builderById.queryOptions({
+				id: chatId,
+			}),
+		);
+	}
 
 	return <AgentBuilderChat conversationId={chatId} />;
 }

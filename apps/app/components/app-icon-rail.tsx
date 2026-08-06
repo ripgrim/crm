@@ -53,7 +53,7 @@ const ITEMS: RailItem[] = [
 		href: "/chat",
 		icon: Bot,
 		match: "prefix",
-		related: ["/agent", "/agents"],
+		related: ["/agents"],
 	},
 	{ title: "Settings", href: "/settings", icon: Settings, match: "prefix" },
 ];

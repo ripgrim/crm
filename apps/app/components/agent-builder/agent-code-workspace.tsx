@@ -11,6 +11,7 @@ import {
 	useFileTreeSelection,
 } from "@pierre/trees/react";
 import { useState } from "react";
+import { latestBuilderArtifacts } from "@/lib/agent-builder-state";
 
 export type AgentCodeArtifact = {
 	id: string;
@@ -27,16 +28,21 @@ export type AgentCodeArtifact = {
 export function AgentCodeWorkspace({
 	artifacts,
 	working,
+	versionId = null,
 }: {
 	artifacts: AgentCodeArtifact[];
 	working: boolean;
+	versionId?: string | null;
 }) {
-	const latest = latestArtifacts(artifacts);
+	const latest = latestBuilderArtifacts(artifacts, versionId);
 	const paths = [...latest.keys()].sort();
+	const treeKey = paths
+		.map((path) => `${path}:${latest.get(path)?.status}`)
+		.join("|");
 
 	return (
 		<AgentCodeWorkspaceSurface
-			key={paths.join("|")}
+			key={treeKey}
 			latest={latest}
 			paths={paths}
 			working={working}
@@ -85,7 +91,10 @@ function AgentCodeWorkspaceSurface({
 			className="overflow-hidden rounded-lg bg-muted/40"
 		>
 			<header className="flex min-h-11 flex-wrap items-center gap-2 px-3 py-2">
-				<span className="flex min-w-0 flex-1 items-center gap-2">
+				<span
+					className="flex min-w-0 flex-1 items-center gap-2"
+					role={working ? "status" : undefined}
+				>
 					<Icon
 						icon={working ? Renew : Checkmark}
 						className={
@@ -94,9 +103,9 @@ function AgentCodeWorkspaceSurface({
 						motion="none"
 					/>
 					<span className="truncate font-medium text-sm">
-						{working ? "Writing agent files" : "Agent files"}
+						{working ? "Writing agent code" : "Agent code"}
 					</span>
-					<span className="shrink-0 text-muted-foreground text-xs">
+					<span className="hidden shrink-0 text-muted-foreground text-xs sm:inline">
 						{paths.length} {paths.length === 1 ? "file" : "files"}
 					</span>
 				</span>
@@ -107,6 +116,7 @@ function AgentCodeWorkspaceSurface({
 					<Button
 						variant={mode === "code" ? "secondary" : "ghost"}
 						size="xs"
+						aria-pressed={mode === "code"}
 						onClick={() => setMode("code")}
 					>
 						Code
@@ -115,6 +125,7 @@ function AgentCodeWorkspaceSurface({
 						variant={mode === "changes" ? "secondary" : "ghost"}
 						size="xs"
 						disabled={previous === null}
+						aria-pressed={mode === "changes"}
 						onClick={() => setMode("changes")}
 					>
 						Changes
@@ -130,7 +141,7 @@ function AgentCodeWorkspaceSurface({
 						style={{ height: "100%", width: "100%" }}
 					/>
 				</div>
-				<div className="min-w-0 overflow-auto bg-background md:h-[360px]">
+				<div className="h-80 min-w-0 overflow-auto bg-background md:h-[360px]">
 					{showChanges ? (
 						<MultiFileDiff
 							oldFile={{
@@ -158,15 +169,4 @@ function AgentCodeWorkspaceSurface({
 			</div>
 		</section>
 	);
-}
-
-function latestArtifacts(artifacts: AgentCodeArtifact[]) {
-	const latest = new Map<string, AgentCodeArtifact>();
-	for (const artifact of artifacts) {
-		const current = latest.get(artifact.path);
-		if (!current || artifact.revision > current.revision) {
-			latest.set(artifact.path, artifact);
-		}
-	}
-	return latest;
 }

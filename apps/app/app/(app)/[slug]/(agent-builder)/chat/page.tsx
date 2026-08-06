@@ -15,11 +15,11 @@ export default function ChatPage() {
 }
 
 async function ChatHome() {
-	const session = await requireSession();
 	const trpc = getServerTrpc();
 	const queryClient = getServerQueryClient();
 
-	await Promise.all([
+	const [session] = await Promise.all([
+		requireSession(),
 		queryClient.prefetchQuery(
 			trpc.conversations.builderResources.queryOptions({ q: "" }),
 		),

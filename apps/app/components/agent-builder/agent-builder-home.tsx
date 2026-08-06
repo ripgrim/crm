@@ -8,7 +8,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useTRPC } from "@/lib/trpc/client";
 import { useWorkspaceUrl } from "@/lib/use-workspace-url";
-import { AgentComposer, type BuilderPrompt } from "./agent-composer";
+import { AgentComposer, type BuilderComposerPrompt } from "./agent-composer";
 
 const SUGGESTIONS = [
 	"Brief every deal owner before a renewal call",
@@ -34,10 +34,13 @@ export function AgentBuilderHome({ name }: { name: string }) {
 		}),
 	);
 
-	const submit = (prompt: BuilderPrompt) => {
-		create.mutate({
+	const submit = async (
+		prompt: BuilderComposerPrompt,
+		clientRequestId: string,
+	) => {
+		await create.mutateAsync({
 			...prompt,
-			clientRequestId: crypto.randomUUID(),
+			clientRequestId,
 		});
 	};
 
@@ -58,7 +61,6 @@ export function AgentBuilderHome({ name }: { name: string }) {
 					key={initialPrompt}
 					mode="home"
 					initialPrompt={initialPrompt}
-					pending={create.isPending}
 					onSubmit={submit}
 				/>
 				<p className="flex h-8 items-center px-px text-muted-foreground text-xs">

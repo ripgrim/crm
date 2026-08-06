@@ -3,13 +3,17 @@ import { readdirSync } from "node:fs";
 import type { EveMessage } from "eve/react";
 import {
 	conversationTimeline,
+	dealListResultOf,
 	describe as describeStep,
+	eventStreamSettled,
 	latestTurnFailure,
+	mergeDealListResultPages,
 	NEW_THREAD,
 	outcomeTone,
 	pendingQuestion,
 	resolveThread,
 	sourcesOf,
+	splitMarkdownTable,
 	TOOL_VERBS,
 	toTranscript,
 } from "../lib/agent-transcript";
@@ -59,6 +63,24 @@ describe("toTranscript", () => {
 		expect(grouped[0]?.items.map((item) => item.kind)).toEqual(["said", "did"]);
 	});
 
+	it("keeps emitted model reasoning as a first-class part", () => {
+		const grouped = toTranscript([
+			message([
+				{
+					type: "reasoning",
+					state: "streaming",
+					text: "I need to inspect the pipeline.",
+				},
+			]),
+		]);
+
+		expect(grouped[0]?.items[0]).toMatchObject({
+			kind: "reasoned",
+			streaming: true,
+			text: "I need to inspect the pipeline.",
+		});
+	});
+
 	it("gives a tool call the same id across its streaming states", () => {
 		const streaming = toTranscript([
 			message([
@@ -99,6 +121,22 @@ describe("toTranscript", () => {
 		expect(grouped[0]?.items[0]).toMatchObject({ kind: "did", pending: true });
 	});
 
+	it("keeps a tool name and structured output for dedicated result UI", () => {
+		const grouped = toTranscript([
+			message([
+				tool("list_deals", {
+					output: { deals: [] },
+				}),
+			]),
+		]);
+
+		expect(grouped[0]?.items[0]).toMatchObject({
+			kind: "did",
+			tool: "list_deals",
+			output: { deals: [] },
+		});
+	});
+
 	it("keeps an ask_question tool as a first-class follow-up", () => {
 		const request = {
 			requestId: "req_1",
@@ -120,6 +158,118 @@ describe("toTranscript", () => {
 		expect(grouped[0]?.items[0]).toMatchObject({
 			kind: "asked",
 			question: { requestId: "req_1", prompt: "Which account should I use?" },
+		});
+	});
+});
+
+describe("deal list presentation", () => {
+	const output = {
+		asOf: "2026-08-06T01:14:05.025Z",
+		criteria: {
+			status: "open",
+			inactiveForDays: 14,
+			companyId: null,
+			ownerId: null,
+		},
+		deals: [
+			{
+				id: "deal-1",
+				name: "Notion — expansion",
+				stage: "CONTRACT_SENT",
+				amount: 14_000,
+				currency: "USD",
+				company: {
+					id: "company-1",
+					name: "Notion",
+					domain: "notion.so",
+					iconUrl: "https://cdn.example.test/notion.png",
+					iconDarkUrl: null,
+					iconTone: "opaque",
+					logoUrl: "https://cdn.example.test/notion.svg",
+				},
+				owner: {
+					id: "user-1",
+					name: "Priya Raman",
+					email: "priya@example.com",
+					image: "https://cdn.example.test/priya.png",
+				},
+				daysSinceLastActivity: 201,
+				neverActive: true,
+				expectedCloseDate: "2026-09-03T19:50:06.111Z",
+			},
+		],
+		hasMore: false,
+	};
+
+	it("parses structured list_deals output", () => {
+		expect(dealListResultOf(output)).toMatchObject({
+			criteria: { status: "open", inactiveForDays: 14 },
+			deals: [
+				{
+					id: "deal-1",
+					daysSinceLastActivity: 201,
+					company: {
+						iconUrl: "https://cdn.example.test/notion.png",
+					},
+					owner: { image: "https://cdn.example.test/priya.png" },
+				},
+			],
+		});
+		expect(dealListResultOf({ deals: [] })).toBeNull();
+	});
+
+	it("merges paginated deal results without duplicate rows", () => {
+		const first = dealListResultOf({ ...output, hasMore: true });
+		const second = dealListResultOf({
+			...output,
+			asOf: "2026-08-06T01:15:00.000Z",
+			deals: [
+				output.deals[0],
+				{ ...output.deals[0], id: "deal-2", name: "Linear — Comp AI" },
+			],
+		});
+		if (!first || !second) throw new Error("Expected valid deal list results");
+
+		expect(mergeDealListResultPages([first, second])).toMatchObject([
+			{
+				asOf: "2026-08-06T01:15:00.000Z",
+				hasMore: false,
+				deals: [{ id: "deal-1" }, { id: "deal-2" }],
+			},
+		]);
+	});
+
+	it("keeps different deal query scopes in separate result groups", () => {
+		const open = dealListResultOf(output);
+		const company = dealListResultOf({
+			...output,
+			criteria: { ...output.criteria, companyId: "company-1" },
+		});
+		if (!open || !company) throw new Error("Expected valid deal list results");
+
+		expect(mergeDealListResultPages([open, company])).toMatchObject([
+			{ criteria: { companyId: null }, deals: [{ id: "deal-1" }] },
+			{ criteria: { companyId: "company-1" }, deals: [{ id: "deal-1" }] },
+		]);
+	});
+
+	it("removes model-authored Markdown tables while keeping its analysis", () => {
+		const markdown = [
+			"I found two stale deals.",
+			"",
+			"| Deal | Idle |",
+			"|---|---|",
+			"| Notion | 201 days |",
+			"| Linear | 134 days |",
+			"",
+			"### What stands out",
+			"Follow up on Notion first.",
+		].join("\n");
+
+		expect(splitMarkdownTable(markdown)).toEqual({
+			before: "I found two stale deals.",
+			after: "### What stands out\nFollow up on Notion first.",
+			found: true,
 		});
 	});
 });
@@ -166,6 +316,23 @@ describe("conversationTimeline", () => {
 			"submission:answer",
 			"assistant:a2",
 		]);
+	});
+});
+
+describe("eventStreamSettled", () => {
+	it("keeps fetching after a tool step until the terminal event arrives", () => {
+		expect(
+			eventStreamSettled([
+				{ type: "message.completed" },
+				{ type: "tool.completed" },
+			]),
+		).toBe(false);
+		expect(
+			eventStreamSettled([
+				{ type: "message.completed" },
+				{ type: "session.waiting" },
+			]),
+		).toBe(true);
 	});
 });
 
