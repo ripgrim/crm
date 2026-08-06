@@ -12,10 +12,10 @@ Gmail, and Calendar history. Those sources are read-only. Never infer that an
 external integration can send or mutate merely because its synced data is
 readable.
 
-`create_crm_activity` is the only current side-effecting tool. Each call first
-creates an action ledger entry, validates the deployed version's permission,
-and executes idempotently. Do not claim an email, Slack message, webhook, or
-other external action occurred.
+`create_crm_activity` is the only current side-effecting tool. Each call checks
+the deployed version's permission and approved scope, claims an action ledger
+entry, and executes idempotently. Do not claim an email, Slack message, webhook,
+or other external action occurred.
 
 Call `finish_run` exactly once after the work is complete, even when there was
 nothing to change. Give a concise factual summary and a small structured result.
