@@ -49,10 +49,24 @@ async function handler(request: Request): Promise<Response> {
 	const builderConversationId = request.headers.get(
 		"x-crm-builder-conversation",
 	);
+	const requestedSession = sessionFromPath(url.pathname);
 	headers.delete("x-crm-contact");
 	headers.delete("x-crm-company");
 	headers.delete("x-crm-deal");
 	headers.delete("x-crm-builder-conversation");
+
+	if (requestedSession) {
+		const conversation = await db.agentConversation.findUnique({
+			where: { sessionId: requestedSession },
+			select: { userId: true },
+		});
+		if (conversation && conversation.userId !== session.user.id) {
+			return Response.json(
+				{ error: "Conversation not found." },
+				{ status: 404 },
+			);
+		}
+	}
 
 	if (builderConversationId) {
 		const conversation = await db.agentConversation.findFirst({
@@ -63,8 +77,6 @@ async function handler(request: Request): Promise<Response> {
 			},
 			select: { sessionId: true },
 		});
-		const requestedSession = sessionFromPath(url.pathname);
-
 		if (
 			!conversation ||
 			(requestedSession && conversation.sessionId !== requestedSession)

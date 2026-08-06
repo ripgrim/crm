@@ -35,6 +35,33 @@ export function requireAttribute(ctx: PurposeContext, key: string): string {
 	return value;
 }
 
+export function requireBuilderAttribute(
+	ctx: PurposeContext,
+	key: string,
+): string {
+	if (
+		purposeOf(ctx) !== "builder" ||
+		attribute(ctx, "commandType") !== "CREATE_AGENT"
+	) {
+		throw new Error(
+			"Agent creation requires the current builder turn's Create agent command.",
+		);
+	}
+	return requireAttribute(ctx, key);
+}
+
+export function requireTeamAgentAttribute(
+	ctx: PurposeContext,
+	key: string,
+): string {
+	if (purposeOf(ctx) !== "team-agent") {
+		throw new Error(
+			"This deployed-agent tool is unavailable for this session.",
+		);
+	}
+	return requireAttribute(ctx, key);
+}
+
 export function assertResearchPurpose(ctx: PurposeContext): void {
 	if (purposeOf(ctx) !== "research") {
 		throw new Error("This CRM research tool is unavailable for this session.");

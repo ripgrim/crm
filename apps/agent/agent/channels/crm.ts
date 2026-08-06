@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { EnrichmentStatus } from "@crm/db";
 import { defineChannel, POST } from "eve/channels";
 import { verifyKey } from "../lib/context-dev";
@@ -20,8 +21,13 @@ const TASK_MARKER = "task:";
 function authorised(request: Request): boolean {
 	const secret = process.env.AGENT_BRIDGE_SECRET?.trim();
 	if (!secret) return false;
+	const header = request.headers.get("authorization");
+	if (!header?.startsWith("Bearer ")) return false;
+	const candidate = Buffer.from(header.slice("Bearer ".length));
+	const expected = Buffer.from(secret);
+	if (candidate.length !== expected.length) return false;
 
-	return request.headers.get("authorization") === `Bearer ${secret}`;
+	return timingSafeEqual(candidate, expected);
 }
 
 export function taskToken(taskId: string): string {
